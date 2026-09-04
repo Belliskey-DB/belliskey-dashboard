@@ -104,8 +104,15 @@ with t1:
                 rows = [tuple(r) for r in df.reindex(columns=cols).astype(object)
                         .where(pd.notna(df.reindex(columns=cols)), None).itertuples(index=False, name=None)]
                 with conn.cursor() as cur:
+                    # Register any marketplace this file contains before inserting sales,
+                    # otherwise the channel_id foreign key rejects the whole batch the
+                    # first time she sells on a marketplace we have not seen before.
+                    chans = df[['channel_id', 'channel_name']].drop_duplicates()
+                    execute_values(cur, """INSERT INTO dim_channel (channel_id, channel_name)
+                        VALUES %s ON CONFLICT (channel_id) DO NOTHING""",
+                        [tuple(r) for r in chans.itertuples(index=False, name=None)])
                     execute_values(cur, f"""INSERT INTO fact_sales ({', '.join(cols)}) VALUES %s
-                        ON CONFLICT (order_id, sku_id, return_flag) DO UPDATE SET
+                        ON CONFLICT (order_id, sku_id, invoice_no, return_flag) DO UPDATE SET
                         qty=EXCLUDED.qty, gross_value=EXCLUDED.gross_value, discount=EXCLUDED.discount,
                         net_value=EXCLUDED.net_value, taxable_value=EXCLUDED.taxable_value,
                         tax_value=EXCLUDED.tax_value""", rows, page_size=1000)

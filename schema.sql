@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS fact_sales (
     channel_id      text REFERENCES dim_channel(channel_id),
     warehouse_id    text,
     order_id        text NOT NULL,
-    invoice_no      text,
+    invoice_no      text NOT NULL DEFAULT '',
     sku_id          text NOT NULL,
     qty             integer NOT NULL,
     gross_value     numeric(12,2) DEFAULT 0, -- selling price × qty, before discount
@@ -65,7 +65,12 @@ CREATE TABLE IF NOT EXISTS fact_sales (
     payment_method  text,                    -- PREPAID / COD
     return_flag     boolean DEFAULT false,
     ingest_batch_id text,
-    UNIQUE (order_id, sku_id, return_flag)
+    -- invoice_no is part of the key on purpose: a marketplace can split one order
+    -- across two invoices (Flipkart does), and those are genuinely separate lines.
+    -- Keying without it silently collapsed 14 of Belliskey's Jun-Aug rows.
+    -- It defaults to '' rather than NULL because Postgres treats NULLs as distinct,
+    -- which would let the same row insert twice on a re-upload.
+    UNIQUE (order_id, sku_id, invoice_no, return_flag)
 );
 CREATE INDEX IF NOT EXISTS fact_sales_date_idx    ON fact_sales (sale_date);
 CREATE INDEX IF NOT EXISTS fact_sales_sku_idx     ON fact_sales (sku_id);

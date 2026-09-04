@@ -172,7 +172,8 @@ def parse(file, is_return: bool = False) -> tuple[pd.DataFrame, dict]:
     report['unmapped_channels'] = sorted(set(ledger[mapped.isna()].str.strip()))
 
     out['order_id'] = raw['Sale Order Number'].astype(str).str.strip()
-    out['invoice_no'] = raw.get('Invoice number', pd.Series(dtype=str)).astype(str).str.strip()
+    _inv = raw['Invoice number'] if 'Invoice number' in raw.columns else pd.Series('', index=raw.index)
+    out['invoice_no'] = _inv.fillna('').astype(str).str.strip().replace({'nan': '', 'None': ''})
     out['sku_id'] = raw['Product SKU Code'].astype(str).str.strip()
     out['product_name'] = raw['Product Name'].map(clean_product_name)
     out['category'] = out['product_name'].map(derive_category)
