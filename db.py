@@ -93,6 +93,12 @@ def diagnose(reason: str) -> str:
         return ('The host name does not resolve. Check SUPABASE_HOST — it must be copied from your own '
                 'project under Connect, and it must be the **Session pooler** host, which ends in '
                 '`.pooler.supabase.com`.')
+    if 'enotfound' in r and 'tenant' in r:
+        return ('The pooler answered but does not host a project with that user. The **host and the user '
+                'must come from the same Session pooler tab** — the pooler is region-specific, so a user '
+                'from one project will not be found on another region\'s host. In Supabase go to Connect, '
+                'Session pooler, and copy the host and the user from that one connection string. The '
+                'region prefix is often `aws-1-...`, not `aws-0-...`.')
     if 'password authentication failed' in r:
         return ('The host was reached but the login was rejected. Check SUPABASE_USER is the pooler user '
                 '(it looks like `postgres.abcdefghijklmnop`, not plain `postgres`) and that '
