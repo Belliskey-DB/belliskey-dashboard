@@ -51,12 +51,16 @@ sold = df[~df['return_flag']]
 ret = df[df['return_flag']]
 
 def _by(group_cols):
-    s = sold.assign(cogs=sold['qty'] * sold['cost_price'].fillna(0))
+    _cost = pd.to_numeric(sold['cost_price'], errors='coerce').fillna(0.0)
+    s = sold.assign(cogs=pd.to_numeric(sold['qty'], errors='coerce').fillna(0) * _cost)
     g = s.groupby(group_cols).agg(units=('qty', 'sum'), gross=('net_value', 'sum'),
                                   cogs_all=('cogs', 'sum')).reset_index()
-    r = ret.assign(cogs=ret['qty'] * ret['cost_price'].fillna(0)).groupby(group_cols).agg(
+    _rcost = pd.to_numeric(ret['cost_price'], errors='coerce').fillna(0.0)
+    r = ret.assign(cogs=pd.to_numeric(ret['qty'], errors='coerce').fillna(0) * _rcost).groupby(group_cols).agg(
         ret_units=('qty', 'sum'), returns=('net_value', 'sum'), cogs_back=('cogs', 'sum')).reset_index()
-    g = g.merge(r, on=group_cols, how='left').fillna({'ret_units': 0, 'returns': 0, 'cogs_back': 0})
+    g = g.merge(r, on=group_cols, how='left')
+    for _c in ('ret_units', 'returns', 'cogs_back'):
+        g[_c] = pd.to_numeric(g[_c], errors='coerce').fillna(0.0)
     g['net_sales'] = g['gross'] - g['returns']
     g['rate'] = g['channel_id'].map(rates).fillna(0)
     g['deductions'] = g['gross'] * g['rate'] / 100
@@ -113,7 +117,7 @@ with right:
 st.subheader('By channel')
 st.dataframe(ch[['channel_name', 'units', 'return_rate', 'gross', 'returns', 'net_sales', 'rate', 'deductions',
                  'cogs', 'handling', 'contribution', 'margin_pct', 'per_unit']],
-             hide_index=True, use_container_width=True, column_config={
+             hide_index=True, width='stretch', column_config={
     'channel_name': 'Channel',
     'units': st.column_config.NumberColumn('Units', format='%d'),
     'return_rate': st.column_config.NumberColumn('Return %', format='%.0f%%'),
@@ -146,7 +150,7 @@ def _shade(v):
     if v < 10:
         return 'background-color: #FFF3CD; color: #6B4E00'
     return 'background-color: #D4EDDA; color: #155724'
-st.dataframe(pv.round(1).style.map(_shade).format('{:.1f}%', na_rep='–'), use_container_width=True)
+st.dataframe(pv.round(1).style.map(_shade).format('{:.1f}%', na_rep='–'), width='stretch')
 st.caption('Red = losing money · amber = under 10% margin · green = 10%+')
 
 with st.expander('Style-level contribution (find loss-making styles)'):
@@ -159,7 +163,7 @@ with st.expander('Style-level contribution (find loss-making styles)'):
     order = st.radio('Sort', ['Lowest margin first', 'Biggest contribution first'], horizontal=True)
     agg = agg.sort_values('margin_pct' if order.startswith('Lowest') else 'contribution',
                           ascending=order.startswith('Lowest'))
-    st.dataframe(agg[agg['units'] >= 5], hide_index=True, use_container_width=True, column_config={
+    st.dataframe(agg[agg['units'] >= 5], hide_index=True, width='stretch', column_config={
         'net_sales': st.column_config.NumberColumn('Net ₹', format='%d'),
         'contribution': st.column_config.NumberColumn('Contribution ₹', format='%d'),
         'margin_pct': st.column_config.NumberColumn('Margin %', format='%.1f%%'),

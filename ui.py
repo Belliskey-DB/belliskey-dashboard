@@ -48,7 +48,7 @@ def page_setup(title: str, icon: str) -> None:
                     for r in log.itertuples()]
             st.caption('Data as of — ' + ' · '.join(bits))
     with st.sidebar:
-        if st.button('🔄 Refresh data', use_container_width=True):
+        if st.button('🔄 Refresh data', width='stretch'):
             data.clear_cache()
             st.rerun()
 

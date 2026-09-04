@@ -52,11 +52,11 @@ def _report_card(rep: dict) -> bool:
     with a:
         st.markdown('**Channels found**')
         st.dataframe(pd.DataFrame(rep['channels'].items(), columns=['Channel', 'Rows']),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width='stretch')
     with b:
         st.markdown('**Categories read from the product name**')
         st.dataframe(pd.DataFrame(rep['categories'].items(), columns=['Category', 'Rows']),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width='stretch')
     if rep.get('unmapped_channels'):
         st.warning('Channel names not recognised, kept under their own name: '
                    + ', '.join(rep['unmapped_channels'])
@@ -90,7 +90,7 @@ with t1:
                         'the sales export, with no channel filter.', icon='ℹ️')
             continue
         with st.expander('First 20 rows, exactly as they will be stored'):
-            st.dataframe(df.head(20), hide_index=True, use_container_width=True)
+            st.dataframe(df.head(20), hide_index=True, width='stretch')
         st.caption('Customer names, addresses, phone numbers and AWB numbers are not read. '
                    'City and state are kept for the geography view.')
 
@@ -147,7 +147,7 @@ def _sheet_block(title: str, cleaner, writer, table: str, dedupe: list[str], hin
                  f'sheet, or add its name to sheets.py.')
         return
     st.success(f'Recognised {len(clean):,} rows · columns: {", ".join(clean.columns)}')
-    st.dataframe(clean.head(20), hide_index=True, use_container_width=True)
+    st.dataframe(clean.head(20), hide_index=True, width='stretch')
     if st.button(f'Load {len(clean):,} rows', key=f'btn_{table}', type='primary'):
         if TO_SUPABASE:
             n = writer(db.get_conn(), clean)
@@ -199,7 +199,7 @@ with t4:
             mapped['snapshot_date'] = pd.Timestamp(date.today())
             g = mapped.groupby(['snapshot_date', 'sku_id', 'warehouse_id'], as_index=False)['stock_qty'].sum()
             st.success(f'{len(g):,} SKU × warehouse rows · {g["stock_qty"].sum():,} units')
-            st.dataframe(g.head(20), hide_index=True, use_container_width=True)
+            st.dataframe(g.head(20), hide_index=True, width='stretch')
             if st.button(f'Load stock snapshot for {date.today():%d %b %Y}', type='primary'):
                 if TO_SUPABASE:
                     from psycopg2.extras import execute_values
@@ -225,7 +225,7 @@ with t5:
     st.markdown(f'**Source:** `{data.source()}`')
     log = data.load_sync_log()
     if len(log):
-        st.dataframe(log, hide_index=True, use_container_width=True)
+        st.dataframe(log, hide_index=True, width='stretch')
     else:
         st.caption('Nothing loaded yet.')
 

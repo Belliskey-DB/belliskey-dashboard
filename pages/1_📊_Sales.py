@@ -91,7 +91,7 @@ with left:
     st.subheader('By channel')
     show = by_ch[['channel_name', 'units', 'gross', 'returns', 'net', 'return_rate']].copy()
     show['share'] = show['net'] / show['net'].sum() * 100
-    st.dataframe(show, hide_index=True, use_container_width=True, column_config={
+    st.dataframe(show, hide_index=True, width='stretch', column_config={
         'channel_name': 'Channel', 'units': st.column_config.NumberColumn('Units', format='%d'),
         'gross': st.column_config.NumberColumn('Gross ₹', format='%d'),
         'returns': st.column_config.NumberColumn('Returns ₹', format='%d'),
@@ -124,7 +124,7 @@ g['return_rate'] = g['ret_units'] / g['units'] * 100
 g['asp'] = g['gross'] / g['units']
 top = g.sort_values('net', ascending=False).head(n)
 st.dataframe(top[['style_code', 'product_name', 'category', 'units', 'net', 'asp', 'return_rate']],
-             hide_index=True, use_container_width=True, column_config={
+             hide_index=True, width='stretch', column_config={
     'style_code': 'Style', 'product_name': 'Name', 'category': 'Category',
     'units': st.column_config.NumberColumn('Units', format='%d'),
     'net': st.column_config.NumberColumn('Net ₹', format='%d'),
@@ -171,7 +171,7 @@ with st.expander('Top cities'):
                   .groupby(['city', 'state'], as_index=False)
                   .agg(units=('qty', 'sum'), value=('net_value', 'sum'))
                   .sort_values('value', ascending=False).head(40))
-        st.dataframe(cities, hide_index=True, use_container_width=True, column_config={
+        st.dataframe(cities, hide_index=True, width='stretch', column_config={
             'city': 'City', 'state': 'State',
             'units': st.column_config.NumberColumn('Units', format='%d'),
             'value': st.column_config.NumberColumn('Sales ₹', format='%d')})
@@ -190,7 +190,7 @@ if sold['discount'].notna().any() and float(pd.to_numeric(sold['discount'], erro
         overall = (1 - by['paid'].sum() / by['mrp_value'].sum()) * 100
         st.markdown(f'Overall, things sell at **{overall:.0f}% below MRP**.')
         st.dataframe(by[['category', 'units', 'mrp_value', 'paid', 'discount_pct']],
-                     hide_index=True, use_container_width=True, column_config={
+                     hide_index=True, width='stretch', column_config={
             'category': 'Category',
             'units': st.column_config.NumberColumn('Units', format='%d'),
             'mrp_value': st.column_config.NumberColumn('Value at MRP ₹', format='%d'),
@@ -211,4 +211,4 @@ with st.expander('Size curve (units sold by size, per category)'):
             [s for s in sc.columns if s not in ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL']]
     sc = sc[order]
     st.dataframe((sc.div(sc.sum(axis=1), axis=0) * 100).round(0).astype(int).astype(str) + '%',
-                 use_container_width=True)
+                 width='stretch')

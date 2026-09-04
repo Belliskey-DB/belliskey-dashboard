@@ -96,20 +96,20 @@ cols = ['style_code', 'product_name', 'category', 'stock', 'per_day', 'cover_day
 with tab1:
     low = st_style[(st_style['cover_days'] < low_cover) & (st_style['per_day'] > 0)].sort_values('cover_days')
     st.markdown(f'**{len(low)} styles** will run out within {low_cover} days at current speed — reorder or move stock.')
-    st.dataframe(low[cols], hide_index=True, use_container_width=True, column_config=cfg)
+    st.dataframe(low[cols], hide_index=True, width='stretch', column_config=cfg)
 with tab2:
     dead = st_style[(st_style['days_since_sale'].isna()) | (st_style['days_since_sale'] >= dead_days)] \
         .sort_values('at_cost', ascending=False)
     st.markdown(f'**{len(dead)} styles**, {inr(dead["at_cost"].sum())} at cost, have not sold in {dead_days}+ days — candidates for markdown or bundling.')
-    st.dataframe(dead[cols], hide_index=True, use_container_width=True, column_config=cfg)
+    st.dataframe(dead[cols], hide_index=True, width='stretch', column_config=cfg)
 with tab3:
     so = pd.DataFrame({'style_code': stockout.index, f'units sold last {VELOCITY_DAYS}d': stockout.values}) \
         .sort_values(f'units sold last {VELOCITY_DAYS}d', ascending=False)
     st.markdown('Styles that sold in the window but have **zero stock** in the selected warehouses.')
-    st.dataframe(so, hide_index=True, use_container_width=True)
+    st.dataframe(so, hide_index=True, width='stretch')
 with tab4:
     st.dataframe(st_style[cols].sort_values('at_cost', ascending=False), hide_index=True,
-                 use_container_width=True, column_config=cfg)
+                 width='stretch', column_config=cfg)
     ui.download(st_style, f'inventory_by_style_{date.today()}.csv')
 
 # ---------------------------------------------------------------- size-level drill
@@ -119,4 +119,4 @@ with st.expander('Drill into one style (stock by size × warehouse)'):
     pv = one.pivot_table(index=['color', 'size'], columns='warehouse_name', values='stock_qty',
                          aggfunc='sum', fill_value=0)
     pv['Total'] = pv.sum(axis=1)
-    st.dataframe(pv, use_container_width=True)
+    st.dataframe(pv, width='stretch')

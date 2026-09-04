@@ -76,9 +76,9 @@ cols = ['lot_id', 'style_code', 'product_name', 'category', 'vendor', 'current_s
 tab1, tab2 = st.tabs([f'⏰ Overdue ({len(overdue)})', f'All ({len(view)})'])
 with tab1:
     st.dataframe(overdue[cols].sort_values('overdue_days', ascending=False), hide_index=True,
-                 use_container_width=True, column_config=cfg)
+                 width='stretch', column_config=cfg)
 with tab2:
-    st.dataframe(view[cols].sort_values('expected_date'), hide_index=True, use_container_width=True, column_config=cfg)
+    st.dataframe(view[cols].sort_values('expected_date'), hide_index=True, width='stretch', column_config=cfg)
     ui.download(view[cols], f'production_lots_{date.today()}.csv')
 
 with st.expander('Sales vs production — is what we are making what is selling?'):
@@ -91,6 +91,6 @@ with st.expander('Sales vs production — is what we are making what is selling?
     cmp = cmp[(cmp['sold_30d'] > 0) | (cmp['in_production'] > 0)]
     cmp['cover_after_production_days'] = ((cmp['stock'] + cmp['in_production']) / (cmp['sold_30d'] / 30).replace(0, pd.NA)).astype(float)
     st.markdown('**Making but not selling** — in production, zero sales in 30 days:')
-    st.dataframe(cmp[(cmp['in_production'] > 0) & (cmp['sold_30d'] == 0)].sort_values('in_production', ascending=False), use_container_width=True)
+    st.dataframe(cmp[(cmp['in_production'] > 0) & (cmp['sold_30d'] == 0)].sort_values('in_production', ascending=False), width='stretch')
     st.markdown('**Selling but not making** — top sellers with under 30 days cover and nothing in production:')
-    st.dataframe(cmp[(cmp['in_production'] == 0) & (cmp['cover_after_production_days'] < 30)].sort_values('sold_30d', ascending=False).head(30), use_container_width=True)
+    st.dataframe(cmp[(cmp['in_production'] == 0) & (cmp['cover_after_production_days'] < 30)].sort_values('sold_30d', ascending=False).head(30), width='stretch')
