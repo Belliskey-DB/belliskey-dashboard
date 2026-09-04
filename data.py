@@ -40,8 +40,42 @@ def source() -> str:
     return 'demo'
 
 
+BOOL_COLUMNS = ('return_flag', 'is_active', 'is_freebie')
+INT_COLUMNS = ('qty', 'stock_qty', 'planned_qty', 'received_qty')
+FLOAT_COLUMNS = ('gross_value', 'discount', 'net_value', 'taxable_value', 'tax_value',
+                 'mrp', 'cost_price', 'deduction_pct', 'overhead_per_unit')
+
+
+def _coerce(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Force real dtypes on the columns pages do arithmetic and masking with.
+
+    A query that returns NO rows hands back every column as dtype object.
+    `~df['return_flag']` on an object column then yields an object Series, and
+    `df[object_series]` is read by pandas as a LIST OF COLUMN NAMES rather than
+    a boolean mask — so it silently returns a frame with zero columns and the
+    next lookup dies with a confusing KeyError naming a column that is right
+    there. This bit the Sales page the moment a period had no sales in it.
+
+    Coercing here also absorbs the Decimals and Nones psycopg2 returns for
+    numeric columns, so no page has to think about it.
+    """
+    for c in BOOL_COLUMNS:
+        if c in df.columns:
+            df[c] = df[c].map(lambda v: bool(v) if v is not None and v is not pd.NA else False).astype(bool)
+    for c in INT_COLUMNS:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype('int64')
+    for c in FLOAT_COLUMNS:
+        if c in df.columns:
+            # cost_price stays NaN when absent — has_costs() depends on telling
+            # "no cost loaded" apart from "costs zero".
+            df[c] = pd.to_numeric(df[c], errors='coerce').astype('float64')
+    return df
+
+
 def _empty(cols: list[str]) -> pd.DataFrame:
-    return pd.DataFrame({c: pd.Series(dtype='object') for c in cols})
+    return _coerce(pd.DataFrame({c: pd.Series(dtype='object') for c in cols}))
 
 
 # ---------------------------------------------------------------- reference
@@ -152,7 +186,7 @@ def load_sales(start: date, end: date) -> pd.DataFrame:
     for c in SALES_COLUMNS:
         if c not in df:
             df[c] = pd.NA
-    return df
+    return _coerce(df)
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
@@ -185,7 +219,7 @@ def load_stock_latest() -> pd.DataFrame:
                           'mrp', 'cost_price'])
     df['style_code'] = df['style_code'].fillna(df['sku_id'])
     df['category'] = df['category'].fillna('Uncategorised')
-    return df
+    return _coerce(df)
 
 
 @st.cache_data(ttl=TTL, show_spinner=False)
@@ -203,7 +237,7 @@ def load_production() -> pd.DataFrame:
     """)
     for c in ('po_date', 'expected_date', 'updated_at'):
         df[c] = pd.to_datetime(df[c])
-    return df
+    return _coerce(df)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
