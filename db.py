@@ -65,6 +65,47 @@ def get_conn():
         return _conn()
 
 
+def _sanitise(msg: str) -> str:
+    """Never let a connection string or password reach the screen."""
+    import re
+    msg = re.sub(r"password=\S+", "password=***", str(msg))
+    msg = re.sub(r"://[^@\s]+@", "://***@", msg)
+    return msg.strip()[:300]
+
+
+def health() -> str | None:
+    """None when the database answers. Otherwise a short, safe reason why not."""
+    if not is_configured():
+        return None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1')
+        return None
+    except Exception as e:                       # noqa: BLE001 - any failure is a failure
+        return _sanitise(e)
+
+
+def diagnose(reason: str) -> str:
+    """Turn a psycopg2 message into the thing to actually go and check."""
+    r = (reason or '').lower()
+    if 'could not translate host name' in r or 'name or service not known' in r or 'nodename nor servname' in r:
+        return ('The host name does not resolve. Check SUPABASE_HOST — it must be copied from your own '
+                'project under Connect, and it must be the **Session pooler** host, which ends in '
+                '`.pooler.supabase.com`.')
+    if 'password authentication failed' in r:
+        return ('The host was reached but the login was rejected. Check SUPABASE_USER is the pooler user '
+                '(it looks like `postgres.abcdefghijklmnop`, not plain `postgres`) and that '
+                'SUPABASE_PASSWORD is the **database** password, not the anon or service key.')
+    if 'timeout' in r or 'timed out' in r or 'no route to host' in r or 'network is unreachable' in r:
+        return ('The connection timed out. This is almost always the **Direct connection** host being used '
+                'instead of the Session pooler. Direct connections are IPv6-only and Streamlit Cloud '
+                'cannot reach them. Use the Session pooler tab.')
+    if 'does not exist' in r and 'database' in r:
+        return 'SUPABASE_DB should be `postgres`.'
+    return ('Check every SUPABASE_ value against the Session pooler tab in Supabase under Connect.')
+
+
 def query_df(sql: str, params=None) -> pd.DataFrame:
     """Run a SELECT and return a DataFrame."""
     conn = get_conn()

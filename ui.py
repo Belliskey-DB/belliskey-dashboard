@@ -32,6 +32,19 @@ def page_setup(title: str, icon: str) -> None:
                        initial_sidebar_state='expanded')
     require_auth()
     st.title(f'{icon} {title}')
+    # A configured but unreachable database must not take the whole app down
+    # with a stack trace. Say what is wrong and what to change.
+    import db as _db
+    _bad = _db.health()
+    if _bad:
+        st.error('Cannot reach the Supabase database, so no data can be shown.', icon='🔌')
+        st.markdown(f'**What to fix:** {_db.diagnose(_bad)}')
+        with st.expander('Technical detail'):
+            st.code(_bad, language='text')
+        st.markdown('Secrets live under the three dots at the top right, then Settings, then Secrets. '
+                    'The app restarts by itself after you save.')
+        st.stop()
+
     src = data.source()
     if src == 'demo':
         st.info('**Demo data.** Load a real file on the 📥 Data Hub page, or connect Supabase. '
