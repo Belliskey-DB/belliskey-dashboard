@@ -103,6 +103,24 @@ CREATE TABLE IF NOT EXISTS fact_production_lot (
     updated_at    timestamptz DEFAULT now()
 );
 
+-- One row per supplier invoice. This is the Tally ledger export, so it is
+-- INVOICE level, not SKU level: it can give a blended cost per unit but never
+-- a per-style cost. A Credit Note is stock returned to the supplier and carries
+-- negative qty and value.
+CREATE TABLE IF NOT EXISTS fact_purchase (
+    purchase_id   bigserial PRIMARY KEY,
+    purchase_date date NOT NULL,
+    supplier      text NOT NULL DEFAULT '',
+    voucher_type  text,
+    voucher_no    text NOT NULL DEFAULT '',
+    qty           integer DEFAULT 0,
+    value         numeric(14,2) DEFAULT 0,  -- taxable value
+    gross_total   numeric(14,2) DEFAULT 0,  -- including GST
+    fy            text,                     -- Indian financial year, e.g. 2026-27
+    UNIQUE (supplier, voucher_no, purchase_date)
+);
+CREATE INDEX IF NOT EXISTS fact_purchase_date_idx ON fact_purchase (purchase_date);
+
 -- Records every sync run so the dashboard can show "data as of …".
 CREATE TABLE IF NOT EXISTS sync_log (
     id          bigserial PRIMARY KEY,
@@ -136,7 +154,8 @@ DO $$
 DECLARE t text;
 BEGIN
   FOR t IN SELECT unnest(ARRAY['dim_sku','dim_channel','dim_warehouse','fact_sales',
-                               'fact_stock_snapshot','fact_production_lot','sync_log'])
+                               'fact_stock_snapshot','fact_production_lot',
+                               'fact_purchase','sync_log'])
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
   END LOOP;

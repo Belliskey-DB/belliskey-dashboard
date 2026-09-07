@@ -1,5 +1,6 @@
 """Production — open lots from the Production sheet."""
 from datetime import date
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -89,7 +90,7 @@ with st.expander('Sales vs production — is what we are making what is selling?
     prod = open_lots.groupby('style_code')['open_qty'].sum().rename('in_production')
     cmp = pd.concat([sold, stock, prod], axis=1).fillna(0)
     cmp = cmp[(cmp['sold_30d'] > 0) | (cmp['in_production'] > 0)]
-    cmp['cover_after_production_days'] = ((cmp['stock'] + cmp['in_production']) / (cmp['sold_30d'] / 30).replace(0, pd.NA)).astype(float)
+    cmp['cover_after_production_days'] = ((cmp['stock'] + cmp['in_production']) / (cmp['sold_30d'] / 30).replace(0, np.nan)).astype(float)
     st.markdown('**Making but not selling** — in production, zero sales in 30 days:')
     st.dataframe(cmp[(cmp['in_production'] > 0) & (cmp['sold_30d'] == 0)].sort_values('in_production', ascending=False), width='stretch')
     st.markdown('**Selling but not making** — top sellers with under 30 days cover and nothing in production:')

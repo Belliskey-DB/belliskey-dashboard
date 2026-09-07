@@ -28,6 +28,8 @@ SALES_COLUMNS = ['sale_date', 'channel_id', 'channel_name', 'order_id', 'invoice
                  'mrp', 'cost_price']
 STOCK_COLUMNS = ['snapshot_date', 'sku_id', 'warehouse_id', 'warehouse_name', 'stock_qty',
                  'style_code', 'product_name', 'category', 'gender', 'color', 'size', 'mrp', 'cost_price']
+PURCHASE_COLUMNS = ['purchase_date', 'supplier', 'voucher_type', 'voucher_no', 'qty',
+                    'value', 'gross_total', 'fy']
 PRODUCTION_COLUMNS = ['lot_id', 'style_code', 'product_name', 'category', 'vendor', 'color',
                       'planned_qty', 'received_qty', 'po_date', 'expected_date', 'current_stage', 'updated_at']
 
@@ -43,7 +45,8 @@ def source() -> str:
 BOOL_COLUMNS = ('return_flag', 'is_active', 'is_freebie')
 INT_COLUMNS = ('qty', 'stock_qty', 'planned_qty', 'received_qty')
 FLOAT_COLUMNS = ('gross_value', 'discount', 'net_value', 'taxable_value', 'tax_value',
-                 'mrp', 'cost_price', 'deduction_pct', 'overhead_per_unit')
+                 'mrp', 'cost_price', 'deduction_pct', 'overhead_per_unit',
+                 'value', 'gross_total')
 
 
 def _coerce(df: pd.DataFrame) -> pd.DataFrame:
@@ -65,13 +68,20 @@ def _coerce(df: pd.DataFrame) -> pd.DataFrame:
             df[c] = df[c].map(lambda v: bool(v) if v is not None and v is not pd.NA else False).astype(bool)
     for c in INT_COLUMNS:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype('int64')
+            df[c] = pd.to_numeric(_nullable(df[c]), errors='coerce').fillna(0).astype('int64')
     for c in FLOAT_COLUMNS:
         if c in df.columns:
-            # cost_price stays NaN when absent — has_costs() depends on telling
+            # cost_price stays NaN when absent — cost_basis() depends on telling
             # "no cost loaded" apart from "costs zero".
-            df[c] = pd.to_numeric(df[c], errors='coerce').astype('float64')
+            df[c] = pd.to_numeric(_nullable(df[c]), errors='coerce').astype('float64')
     return df
+
+
+def _nullable(col: pd.Series) -> pd.Series:
+    """pd.NA survives to_numeric on an all-missing object column and then blows up
+    the astype with 'float() argument must be a string or a number, not NAType'.
+    None does not, so normalise to None first."""
+    return col.where(col.notna(), None)
 
 
 def _empty(cols: list[str]) -> pd.DataFrame:
@@ -137,17 +147,37 @@ def load_warehouses() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------- facts
+# The SKU master is better than anything a sales file can tell us for these:
+# style code and size exist nowhere else, and its category is the one she
+# actually merchandises by. Where it has a value it wins; the value derived
+# from the sales file stays as the fallback.
+MASTER_WINS = ('style_code', 'size', 'category', 'gender', 'color', 'mrp', 'cost_price')
+
+
 def _attach_sku(df: pd.DataFrame, want: list[str]) -> pd.DataFrame:
-    """Add SKU attributes that are not already on the rows."""
+    """Add SKU attributes, letting the master override what the file guessed."""
     sku = load_skus()
     if sku is None or sku.empty:
         for c in want:
             if c not in df:
                 df[c] = pd.NA
         return df
-    missing = [c for c in want if c not in df.columns and c in sku.columns]
-    if missing:
-        df = df.merge(sku[['sku_id'] + missing], on='sku_id', how='left')
+
+    add = [c for c in want if c in sku.columns]
+    if add:
+        m = sku[['sku_id'] + add].drop_duplicates('sku_id')
+        df = df.merge(m, on='sku_id', how='left', suffixes=('', '__master'))
+        for c in add:
+            mc = f'{c}__master'
+            if mc not in df.columns:
+                continue
+            if c in MASTER_WINS and c in df.columns:
+                master = df[mc]
+                blank = master.isna() | master.astype(str).str.strip().isin(['', 'nan', 'None'])
+                df[c] = master.where(~blank, df[c])
+            elif c not in df.columns:
+                df[c] = df[mc]
+            df = df.drop(columns=[mc])
     for c in want:
         if c not in df:
             df[c] = pd.NA
@@ -238,6 +268,66 @@ def load_production() -> pd.DataFrame:
     for c in ('po_date', 'expected_date', 'updated_at'):
         df[c] = pd.to_datetime(df[c])
     return _coerce(df)
+
+
+@st.cache_data(ttl=TTL, show_spinner=False)
+def load_purchases() -> pd.DataFrame:
+    s = source()
+    if s == 'demo':
+        return _empty(PURCHASE_COLUMNS)
+    if s == 'local':
+        df = store.load('purchase')
+        if df is None or df.empty:
+            return _empty(PURCHASE_COLUMNS)
+    else:
+        df = db.query_df("""
+            SELECT purchase_date, supplier, voucher_type, voucher_no, qty,
+                   value::float AS value, gross_total::float AS gross_total, fy
+            FROM fact_purchase
+        """)
+        if df.empty:
+            return _empty(PURCHASE_COLUMNS)
+    df = df.copy()
+    df['purchase_date'] = pd.to_datetime(df['purchase_date'])
+    return _coerce(df)
+
+
+def cost_basis(period_start=None, period_end=None) -> dict:
+    """
+    How the P&L should value cost of goods, and how honest to be about it.
+
+      per_sku   a real cost price per barcode          -> a true margin
+      blended   total bought / units bought, from the
+                purchase ledger                        -> an approximate margin
+      none      nothing loaded                         -> revenue after deductions only
+    """
+    sku = load_skus()
+    if not sku.empty and 'cost_price' in sku:
+        if pd.to_numeric(sku['cost_price'], errors='coerce').notna().any():
+            return {'mode': 'per_sku', 'rate': None, 'fy': None,
+                    'label': 'cost price per SKU from the master sheet'}
+
+    pur = load_purchases()
+    if pur.empty:
+        return {'mode': 'none', 'rate': None, 'fy': None,
+                'label': 'no cost data loaded'}
+
+    # Prefer the financial year the sales period actually sits in.
+    fy = None
+    if period_start is not None:
+        d = pd.Timestamp(period_start)
+        fy = f'{d.year}-{str(d.year + 1)[2:]}' if d.month >= 4 else f'{d.year - 1}-{str(d.year)[2:]}'
+        if fy not in set(pur['fy'].dropna()):
+            fy = None
+    sub = pur[pur['fy'] == fy] if fy else pur
+    units = pd.to_numeric(sub['qty'], errors='coerce').sum()
+    value = pd.to_numeric(sub['value'], errors='coerce').sum()
+    if not units:
+        return {'mode': 'none', 'rate': None, 'fy': None, 'label': 'no cost data loaded'}
+    rate = float(value / units)
+    return {'mode': 'blended', 'rate': rate, 'fy': fy,
+            'label': f'blended ₹{rate:,.0f} per unit from the purchase ledger'
+                     + (f' ({fy})' if fy else '')}
 
 
 @st.cache_data(ttl=60, show_spinner=False)

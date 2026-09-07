@@ -1,4 +1,5 @@
 """Sales — the daily view. Revenue is always shown NET of returns."""
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -77,7 +78,7 @@ by_ch['net'] = by_ch['gross'] - by_ch['returns']
 by_ch['units'] = sold.groupby('channel_name')['qty'].sum()
 by_ch['ret_units'] = ret.groupby('channel_name')['qty'].sum()
 by_ch = by_ch.fillna(0)
-by_ch['return_rate'] = (by_ch['ret_units'] / by_ch['units'].replace(0, pd.NA) * 100).fillna(0)
+by_ch['return_rate'] = (by_ch['ret_units'] / by_ch['units'].replace(0, np.nan) * 100).fillna(0)
 by_ch = by_ch.sort_values('net', ascending=False).reset_index()
 with right:
     fig = ui.bar(by_ch, 'channel_name', 'net', 'Net sales by channel', color='channel_name',
@@ -185,7 +186,7 @@ if sold['discount'].notna().any() and float(pd.to_numeric(sold['discount'], erro
         d['paid'] = pd.to_numeric(d['net_value'], errors='coerce')
         by = d.groupby('category', as_index=False).agg(mrp_value=('mrp_value', 'sum'),
                                                        paid=('paid', 'sum'), units=('qty', 'sum'))
-        by['discount_pct'] = (1 - by['paid'] / by['mrp_value'].replace(0, pd.NA)) * 100
+        by['discount_pct'] = (1 - by['paid'] / by['mrp_value'].replace(0, np.nan)) * 100
         by = by.sort_values('paid', ascending=False)
         overall = (1 - by['paid'].sum() / by['mrp_value'].sum()) * 100
         st.markdown(f'Overall, things sell at **{overall:.0f}% below MRP**.')

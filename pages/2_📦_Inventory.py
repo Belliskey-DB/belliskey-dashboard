@@ -1,5 +1,6 @@
 """Inventory — what is in stock, how long it lasts, and what is stuck."""
 from datetime import date, timedelta
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -35,21 +36,34 @@ if stock.empty:
     st.warning('No stock rows match.')
     st.stop()
 
-stock['at_cost'] = stock['stock_qty'] * stock['cost_price'].fillna(0)
-stock['at_mrp'] = stock['stock_qty'] * stock['mrp'].fillna(0)
+# Value stock at a real cost price where one exists, else at the blended rate
+# from the purchase ledger, and say which is being used.
+BASIS = data.cost_basis()
+_cost = pd.to_numeric(stock['cost_price'], errors='coerce')
+if BASIS['mode'] == 'blended':
+    _cost = _cost.fillna(float(BASIS['rate']))
+stock['at_cost'] = stock['stock_qty'] * _cost.fillna(0)
+stock['at_mrp'] = stock['stock_qty'] * pd.to_numeric(stock['mrp'], errors='coerce').fillna(0)
 
 as_of = stock.groupby('warehouse_name')['snapshot_date'].max()
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric('Units on hand', units(stock['stock_qty'].sum()))
 c2.metric('Stock at cost', inr_short(stock['at_cost'].sum()),
-          help='stock × cost_price from the Master sheet. Missing costs count as ₹0.')
+          help=f'Valued using {BASIS["label"]}.')
 c3.metric('Stock at MRP', inr_short(stock['at_mrp'].sum()))
 c4.metric('SKUs in stock', units(stock['sku_id'].nunique()))
 c5.metric('Styles in stock', units(stock['style_code'].nunique()))
 st.caption('Snapshot dates — ' + ' · '.join(f'{w}: {d:%d %b}' for w, d in as_of.items()))
-missing_cost = stock.loc[stock['cost_price'].isna(), 'sku_id'].nunique()
-if missing_cost:
-    st.warning(f'{missing_cost} SKUs in stock have no cost price in the Master sheet — stock-at-cost is understated.')
+if BASIS['mode'] == 'none':
+    st.info('Stock at cost reads ₹0 because no cost data is loaded. Upload the supplier ledger on '
+            'the 📥 Data Hub page (Purchases tab) to value it.', icon='🧾')
+elif BASIS['mode'] == 'blended':
+    st.caption(f'Stock is valued at the {BASIS["label"]}, so the total is sound but a rail of '
+               f'jackets and a rail of t-shirts are valued the same.')
+else:
+    _mc = stock.loc[pd.to_numeric(stock['cost_price'], errors='coerce').isna(), 'sku_id'].nunique()
+    if _mc:
+        st.warning(f'{_mc} SKUs in stock have no cost price — stock at cost is understated.')
 
 # ---------------------------------------------------------------- by warehouse / category
 left, right = st.columns(2)
@@ -72,7 +86,7 @@ st_style = stock.groupby(['style_code', 'product_name', 'category'], as_index=Fa
 vel = sold.groupby('style_code')['qty'].sum() / VELOCITY_DAYS
 last_sale = sold.groupby('style_code')['sale_date'].max()
 st_style['per_day'] = st_style['style_code'].map(vel).fillna(0)
-st_style['cover_days'] = (st_style['stock'] / st_style['per_day'].replace(0, pd.NA)).astype(float)
+st_style['cover_days'] = (st_style['stock'] / st_style['per_day'].replace(0, np.nan)).astype(float)
 st_style['last_sale'] = st_style['style_code'].map(last_sale)
 st_style['days_since_sale'] = (pd.Timestamp(date.today()) - st_style['last_sale']).dt.days
 

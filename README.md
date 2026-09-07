@@ -15,9 +15,23 @@ to a `data/` folder beside the app until Supabase is connected.
 Loaded on 4 Sep 2026: Jun–Aug 2026, 7,140 invoice lines, ₹59.9L, 7,155 units,
 785 barcodes, across Myntra, Flipkart, Nykaa, Amazon, Ajio and a few small ones.
 
-Two things the sales export does not contain, so they wait for the Master sheet:
-**cost price** (no profit without it) and **style code and size** (each row is
-one barcode until then).
+### What each file gives you
+
+| File | What it unlocks |
+|---|---|
+| Unicommerce **Tally GST Report** | Sales: revenue, channel, geography, payment method |
+| **STOCK FILE …xlsm** (Inventory sheet) | Style code, size, colour, MRP, category, and stock on hand. The sales export has none of these — every row is a bare barcode without it |
+| **Supplier ledger** (Tally export) | A blended cost per unit, which turns the P&L from revenue-after-deductions into an approximate margin |
+| Uniware **Inventory Adjustment** | Stock on hand, same numbers as the workbook |
+
+Loaded 7 Sep 2026: 2,623 barcodes across 580 styles, 17,860 units on hand
+(₹4.18Cr at MRP), and 17 supplier invoices worth ₹45.7L for 13,380 units.
+
+Two limits worth stating plainly. The supplier ledger is invoice level, not
+barcode level, so cost is **blended across everything bought** — sound as a
+company total, misleading per style. And her Product column spells the same
+category several ways (`Women's skirt`, `Women's Skirt`, `Women's Skirts`),
+which `stockfile.py` normalises on the way in.
 
 ## Pages
 
@@ -139,6 +153,8 @@ data permanent and shared between people.
 
 ```
 app.py            landing page
+stockfile.py      her stock workbook: SKU master + stock + movements
+purchases.py      supplier Tally ledger -> blended cost per unit
 auth.py           shared-password gate (fails closed once a DB is configured)
 db.py             Supabase connection
 data.py           the only place pages get data from (Supabase or demo)

@@ -12,6 +12,7 @@ This is an ESTIMATE. It becomes exact only when the deduction rates are
 replaced with numbers read off actual settlement reports.
 """
 from datetime import date
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -39,18 +40,32 @@ if df.empty:
     st.warning('No sales in this period. Widen the date range, or load a file on the 📥 Data Hub page.')
     st.stop()
 
-HAS_COST = data.has_costs()
-if not HAS_COST:
+BASIS = data.cost_basis(start, end)
+HAS_COST = BASIS['mode'] != 'none'
+BLENDED = BASIS['mode'] == 'blended'
+
+if BASIS['mode'] == 'none':
     st.warning(
-        '**Cost of goods is missing, so this is not profit yet.** No SKU has a cost price, which '
-        'means the Master sheet has not been loaded. What you see below is revenue after the '
-        'marketplace deduction and handling only. Load the Master sheet on the 📥 Data Hub page and '
-        'every figure here becomes a real margin.', icon='📗')
+        '**Cost of goods is missing, so this is not profit yet.** What you see below is revenue '
+        'after the marketplace deduction and handling only. Load the supplier ledger on the '
+        '📥 Data Hub page (Purchases tab) and every figure here becomes an approximate margin.',
+        icon='🧾')
+elif BLENDED:
+    st.info(
+        f'**Cost of goods is a blended {inr(BASIS["rate"])} per unit**, from the supplier ledger'
+        + (f' for {BASIS["fy"]}' if BASIS['fy'] else '') +
+        ' — total value bought divided by units bought. The company total is sound; the per-style '
+        'and per-category splits are not, because a jacket is charged the same as a t-shirt. '
+        'Per-style profit needs a cost price per barcode.', icon='⚖️')
 
 sold = df[~df['return_flag']]
 ret = df[df['return_flag']]
 
 def _by(group_cols):
+    # With no per-barcode cost, every unit carries the same blended rate.
+    if BLENDED:
+        sold['cost_price'] = float(BASIS['rate'])
+        ret['cost_price'] = float(BASIS['rate'])
     _cost = pd.to_numeric(sold['cost_price'], errors='coerce').fillna(0.0)
     s = sold.assign(cogs=pd.to_numeric(sold['qty'], errors='coerce').fillna(0) * _cost)
     g = s.groupby(group_cols).agg(units=('qty', 'sum'), gross=('net_value', 'sum'),
@@ -67,9 +82,9 @@ def _by(group_cols):
     g['cogs'] = g['cogs_all'] - g['cogs_back']
     g['handling'] = (g['units'] + g['ret_units']) * overhead
     g['contribution'] = g['net_sales'] - g['deductions'] - g['cogs'] - g['handling']
-    g['margin_pct'] = g['contribution'] / g['net_sales'].replace(0, pd.NA) * 100
-    g['per_unit'] = g['contribution'] / (g['units'] - g['ret_units']).replace(0, pd.NA)
-    g['return_rate'] = g['ret_units'] / g['units'].replace(0, pd.NA) * 100
+    g['margin_pct'] = g['contribution'] / g['net_sales'].replace(0, np.nan) * 100
+    g['per_unit'] = g['contribution'] / (g['units'] - g['ret_units']).replace(0, np.nan)
+    g['return_rate'] = g['ret_units'] / g['units'].replace(0, np.nan) * 100
     return g
 
 ch = _by(['channel_id', 'channel_name']).sort_values('contribution', ascending=False)
@@ -85,7 +100,7 @@ c5.metric(_label, inr_short(tot['contribution']),
           f'{tot["contribution"]/tot["net_sales"]*100:.1f}% of net sales' if tot['net_sales'] else None,
           help=None if HAS_COST else 'Cost of goods is NOT deducted — no cost prices loaded yet.')
 
-if HAS_COST:
+if HAS_COST and not BLENDED:
     no_cost = sold.loc[sold['cost_price'].isna(), 'sku_id'].nunique()
     if no_cost:
         st.warning(f'{no_cost} sold SKUs have no cost price in the Master sheet — their cost counts as ₹0, '
@@ -133,6 +148,7 @@ st.dataframe(ch[['channel_name', 'units', 'return_rate', 'gross', 'returns', 'ne
     'per_unit': st.column_config.NumberColumn('₹ / net unit', format='%d'),
 })
 st.caption(('Contribution is before fixed costs such as salaries, rent and advertising. '
+            + ('Cost of goods is blended, not per style. ' if BLENDED else '')
             if HAS_COST else
             'Cost of goods is not included yet, so treat these as revenue after deductions, not profit. ')
            + 'Deduction rates are estimates until they are checked against real settlement reports.')
@@ -142,6 +158,10 @@ cc = _by(['channel_id', 'channel_name', 'category'])
 pv = cc.pivot_table(index='category', columns='channel_name', values='margin_pct', aggfunc='first')
 st.markdown('Contribution margin % — red cells lose money on that marketplace.' if HAS_COST
             else 'Share of net sales left after deductions and handling, before cost of goods.')
+if BLENDED:
+    st.caption('Read the CHANNEL differences here, not the category ones — every category is '
+               'carrying the same blended cost, so a category that is genuinely cheap to make '
+               'looks no better than an expensive one.')
 def _shade(v):
     if pd.isna(v):
         return ''
@@ -158,8 +178,8 @@ with st.expander('Style-level contribution (find loss-making styles)'):
     agg = sty.groupby(['style_code', 'product_name', 'category']).agg(
         units=('units', 'sum'), net_sales=('net_sales', 'sum'), contribution=('contribution', 'sum'),
         ret_units=('ret_units', 'sum')).reset_index()
-    agg['margin_pct'] = agg['contribution'] / agg['net_sales'].replace(0, pd.NA) * 100
-    agg['return_rate'] = agg['ret_units'] / agg['units'].replace(0, pd.NA) * 100
+    agg['margin_pct'] = agg['contribution'] / agg['net_sales'].replace(0, np.nan) * 100
+    agg['return_rate'] = agg['ret_units'] / agg['units'].replace(0, np.nan) * 100
     order = st.radio('Sort', ['Lowest margin first', 'Biggest contribution first'], horizontal=True)
     agg = agg.sort_values('margin_pct' if order.startswith('Lowest') else 'contribution',
                           ascending=order.startswith('Lowest'))

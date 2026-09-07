@@ -18,7 +18,7 @@ from datetime import datetime
 import pandas as pd
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-TABLES = ('sales', 'sku', 'stock', 'production')
+TABLES = ('sales', 'sku', 'stock', 'production', 'purchase')
 
 
 def _path(name: str) -> str:

@@ -16,6 +16,8 @@ import data
 import db
 import store
 import sheets
+import stockfile as sfile
+import purchases as pur
 import unicommerce as uc
 from fmt import inr, inr_short, units
 
@@ -33,8 +35,9 @@ if not TO_SUPABASE:
         st.info('Supabase is not connected yet, so uploads are saved to a **file in this folder** '
                 'and the pages read from there. That is enough to look at the numbers today.', icon='💾')
 
-t1, t2, t3, t4, t5 = st.tabs(['🛒 Unicommerce sales', '📗 Master sheet', '🛠 Production sheet',
-                              '📦 Stock', '📋 What is loaded'])
+t1, tS, tP, t2, t3, t4, t5 = st.tabs(
+    ['🛒 Unicommerce sales', '🗄 Stock file', '🧾 Purchases', '📗 Master sheet',
+     '🛠 Production sheet', '📦 Uniware stock', '📋 What is loaded'])
 
 
 def _report_card(rep: dict) -> bool:
@@ -135,6 +138,129 @@ with t1:
                 store.save('sku', prov, note='derived from sales file')
                 st.success(f'{added:,} new rows added — {total:,} rows stored in total.')
             data.clear_cache()
+            st.balloons()
+
+
+# ---------------------------------------------------------------- stock file
+with tS:
+    st.markdown('#### Her own stock workbook (STOCK FILE NEW.xlsm)')
+    st.markdown('This one file does two jobs: it is the **SKU master** — the only place style code, '
+                'size and MRP exist, since the Unicommerce export has none of them — and it is the '
+                '**stock on hand**.')
+    as_of = st.date_input('Stock is correct as at', value=date.today(), key='sf_date',
+                          help='The date the counts in the file were taken, not today\'s date.')
+    f = st.file_uploader('STOCK FILE …xlsm', type=['xlsm', 'xlsx', 'xls'], key='up_stockfile')
+    if f:
+        with st.spinner('Reading…'):
+            sku_df, stock_df, rep = sfile.parse_inventory(f, as_of)
+        if rep.get('error'):
+            st.error(rep['error'])
+        else:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric('Barcodes', units(rep['skus']))
+            c2.metric('Styles', units(rep['styles']))
+            c3.metric('Units on hand', units(rep['units']))
+            c4.metric('Value at MRP', inr_short(rep['stock_value_at_mrp']))
+            st.caption(f"{rep['with_mrp']:,} of {rep['skus']:,} barcodes carry an MRP · "
+                       f"{rep['out_of_stock']:,} are out of stock")
+            cats = pd.DataFrame(rep['categories'].items(), columns=['Category', 'Barcodes'])
+            a, b = st.columns([2, 3])
+            with a:
+                st.dataframe(cats, hide_index=True, width='stretch')
+            with b:
+                st.dataframe(sku_df.head(12), hide_index=True, width='stretch')
+            st.caption('Spellings are normalised on the way in — her sheet has "Women\'s skirt", '
+                       '"Women\'s Skirt" and "Women\'s Skirts", which are one category, not three.')
+
+            if st.button(f'Load {len(sku_df):,} barcodes and the stock count', key='btn_sf', type='primary'):
+                if TO_SUPABASE:
+                    conn = db.get_conn()
+                    sheets.write_master(conn, sku_df)
+                    from psycopg2.extras import execute_values
+                    with conn.cursor() as cur:
+                        cur.execute('DELETE FROM fact_stock_snapshot WHERE snapshot_date = %s', (as_of,))
+                        execute_values(cur, 'INSERT INTO fact_stock_snapshot (snapshot_date, sku_id, '
+                                            'warehouse_id, stock_qty) VALUES %s',
+                                       [(as_of, r.sku_id, r.warehouse_id, int(r.stock_qty))
+                                        for r in stock_df.itertuples()], page_size=1000)
+                        cur.execute("INSERT INTO sync_log (source, rows_written, status, message) "
+                                    "VALUES ('stock_file', %s, 'ok', %s)", (len(sku_df), f.name))
+                    conn.commit()
+                else:
+                    old = store.load('sku')
+                    merged = sku_df
+                    if old is not None and not old.empty:
+                        keep_cost = old[pd.to_numeric(old.get('cost_price'), errors='coerce').notna()]
+                        merged = pd.concat([sku_df[~sku_df['sku_id'].isin(keep_cost['sku_id'])], keep_cost],
+                                           ignore_index=True) if len(keep_cost) else sku_df
+                    store.save('sku', merged, note=f.name)
+                    store.save('stock', stock_df, note=f'{f.name} @ {as_of:%d %b %Y}')
+                data.clear_cache()
+                st.success('Loaded. The Inventory page and the style names on Sales are live now.')
+                st.balloons()
+
+        with st.expander('Also in this workbook: movement history'):
+            h, hrep = sfile.parse_history(f)
+            if hrep.get('error'):
+                st.caption(hrep['error'])
+            else:
+                st.markdown(f"**{hrep['rows']:,} movements** read, {hrep['date_min']:%d %b} to "
+                            f"{hrep['date_max']:%d %b %Y} — {hrep['dispatched']:,} units dispatched, "
+                            f"{hrep['returned']:,} returned.")
+                st.dataframe(h.head(10), hide_index=True, width='stretch')
+                st.warning('Not loaded, on purpose. Roughly a third of the rows have dates Excel has '
+                           'mangled into month/day order, and the returns here carry no value and no '
+                           'marketplace — so they cannot stand in for the Unicommerce return export.',
+                           icon='⚠️')
+
+
+# ---------------------------------------------------------------- purchases
+with tP:
+    st.markdown('#### Supplier ledger (Tally export)')
+    st.markdown('Upload one file per financial year. This is what turns the P&L from '
+                '"revenue after deductions" into an approximate margin.')
+    st.caption('It is invoice level, not barcode level, so it gives a blended cost per unit '
+               'across everything bought — never a per-style cost.')
+    fs = st.file_uploader('Ledger export (.xlsx or .csv)', type=['xlsx', 'xls', 'csv'],
+                          key='up_purchase', accept_multiple_files=True)
+    for f in fs or []:
+        st.divider()
+        st.markdown(f'##### {f.name}')
+        df, rep = pur.parse(f)
+        if rep.get('error'):
+            st.error(rep['error'])
+            continue
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric('Invoices', units(rep['rows']))
+        c2.metric('Units bought', units(rep['units']))
+        c3.metric('Value', inr_short(rep['value']))
+        c4.metric('Blended cost', inr(rep['cost_per_unit']) + ' / unit')
+        st.caption(f"{rep['supplier']} · {rep['date_min']:%d %b %Y} → {rep['date_max']:%d %b %Y}"
+                   + (f" · {rep['credit_notes']} credit note(s) netted off" if rep['credit_notes'] else ''))
+        st.dataframe(df, hide_index=True, width='stretch', column_config={
+            'purchase_date': st.column_config.DateColumn('Date', format='DD MMM YYYY'),
+            'qty': st.column_config.NumberColumn('Units', format='%d'),
+            'value': st.column_config.NumberColumn('Value ₹', format='%d'),
+            'gross_total': st.column_config.NumberColumn('Incl GST ₹', format='%d')})
+        if st.button(f'Load {len(df):,} invoices', key=f'btn_pur_{f.name}', type='primary'):
+            if TO_SUPABASE:
+                from psycopg2.extras import execute_values
+                cols = ['purchase_date', 'supplier', 'voucher_type', 'voucher_no', 'qty',
+                        'value', 'gross_total', 'fy']
+                conn = db.get_conn()
+                with conn.cursor() as cur:
+                    execute_values(cur, f"""INSERT INTO fact_purchase ({', '.join(cols)}) VALUES %s
+                        ON CONFLICT (supplier, voucher_no, purchase_date) DO UPDATE SET
+                        qty=EXCLUDED.qty, value=EXCLUDED.value, gross_total=EXCLUDED.gross_total,
+                        voucher_type=EXCLUDED.voucher_type, fy=EXCLUDED.fy""",
+                        [tuple(r) for r in df.reindex(columns=cols).itertuples(index=False, name=None)])
+                    cur.execute("INSERT INTO sync_log (source, rows_written, status, message) "
+                                "VALUES ('purchases', %s, 'ok', %s)", (len(df), f.name))
+                conn.commit()
+            else:
+                store.append('purchase', df, ['supplier', 'voucher_no', 'purchase_date'], note=f.name)
+            data.clear_cache()
+            st.success(f'{len(df):,} invoices loaded. The Marketplace P&L now has a cost basis.')
             st.balloons()
 
 
@@ -243,9 +369,15 @@ with t5:
         c1.metric('SKUs known', units(len(sku)))
         c2.metric('With a cost price', units(has_cost))
         c3.metric('With a style code', units(sku.get('style_code', pd.Series(dtype=str)).notna().sum()))
-        if not has_cost:
-            st.warning('No cost prices yet, so profit cannot be calculated. Load the Master sheet '
-                       'in the second tab and every margin figure turns on.', icon='📗')
+    basis = data.cost_basis()
+    st.markdown(f'**Cost basis for the P&L:** {basis["label"]}')
+    if basis['mode'] == 'none':
+        st.warning('No cost data, so the P&L can only show revenue after marketplace deductions. '
+                   'Load a supplier ledger on the Purchases tab for a blended cost per unit.', icon='🧾')
+    elif basis['mode'] == 'blended':
+        st.info('Blended cost is an average across everything bought, so it is a fair total but not a '
+                'fair per-style number. A jacket and a t-shirt are charged the same. Per-style profit '
+                'needs a cost price per barcode in the master sheet.', icon='ℹ️')
 
     if data.source() == 'local':
         st.divider()
