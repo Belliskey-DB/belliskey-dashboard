@@ -369,7 +369,7 @@ with t5:
         c1.metric('SKUs known', units(len(sku)))
         c2.metric('With a cost price', units(has_cost))
         c3.metric('With a style code', units(sku.get('style_code', pd.Series(dtype=str)).notna().sum()))
-    basis = data.cost_basis()
+    basis = ui.cost_basis()
     st.markdown(f'**Cost basis for the P&L:** {basis["label"]}')
     if basis['mode'] == 'none':
         st.warning('No cost data, so the P&L can only show revenue after marketplace deductions. '

@@ -40,7 +40,7 @@ if df.empty:
     st.warning('No sales in this period. Widen the date range, or load a file on the 📥 Data Hub page.')
     st.stop()
 
-BASIS = data.cost_basis(start, end)
+BASIS = ui.cost_basis(start, end)
 HAS_COST = BASIS['mode'] != 'none'
 BLENDED = BASIS['mode'] == 'blended'
 

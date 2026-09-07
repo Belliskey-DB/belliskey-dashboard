@@ -123,5 +123,24 @@ def line(df: pd.DataFrame, x: str, y: str, title: str = '', color: str | None = 
     return fig
 
 
+def cost_basis(*args, **kwargs) -> dict:
+    """
+    data.cost_basis(), but survives a half-applied deploy.
+
+    Streamlit Cloud re-reads a page script on every run while imported modules
+    stay cached in sys.modules until the process restarts. So a deploy that adds
+    a function to data.py can leave a new page calling a function the running
+    module does not have yet — an AttributeError that reads like a code bug and
+    is really "this server needs rebooting".
+    """
+    fn = getattr(data, 'cost_basis', None)
+    if fn is None:
+        st.warning('This server is running an older copy of the code than the pages expect. '
+                   'Reboot it: **Manage app** at the bottom right, then the three dots, then '
+                   '**Reboot app**.', icon='🔄')
+        return {'mode': 'none', 'rate': None, 'fy': None, 'label': 'unavailable until the app is rebooted'}
+    return fn(*args, **kwargs)
+
+
 def download(df: pd.DataFrame, name: str, label: str = '⬇️ Download CSV') -> None:
     st.download_button(label, df.to_csv(index=False).encode(), file_name=name, mime='text/csv')

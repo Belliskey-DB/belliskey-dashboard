@@ -38,7 +38,7 @@ if stock.empty:
 
 # Value stock at a real cost price where one exists, else at the blended rate
 # from the purchase ledger, and say which is being used.
-BASIS = data.cost_basis()
+BASIS = ui.cost_basis()
 _cost = pd.to_numeric(stock['cost_price'], errors='coerce')
 if BASIS['mode'] == 'blended':
     _cost = _cost.fillna(float(BASIS['rate']))
