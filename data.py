@@ -98,11 +98,15 @@ def load_skus() -> pd.DataFrame:
         df = store.load('sku')
         return df if df is not None else _empty(['sku_id', 'style_code', 'product_name', 'category',
                                                  'gender', 'color', 'size', 'mrp', 'cost_price'])
-    df = db.query_df("""
-        SELECT sku_id, style_code, product_name, category, gender, color, size,
-               mrp::float AS mrp, cost_price::float AS cost_price, launch_date, is_active
-        FROM dim_sku
-    """)
+    try:
+        df = db.query_df("""
+            SELECT sku_id, style_code, product_name, category, gender, color, size,
+                   mrp::float AS mrp, cost_price::float AS cost_price, launch_date, is_active
+            FROM dim_sku
+        """)
+    except db.MissingTable:
+        return _empty(['sku_id', 'style_code', 'product_name', 'category',
+                       'gender', 'color', 'size', 'mrp', 'cost_price'])
     for c in ('style_code', 'product_name', 'category', 'gender', 'color', 'size'):
         if c in df:
             df[c] = df[c].fillna('')
@@ -194,13 +198,17 @@ def load_sales(start: date, end: date) -> pd.DataFrame:
         if df is None or df.empty:
             return _empty(SALES_COLUMNS)
     else:
-        df = db.query_df("""
-            SELECT sale_date, channel_id, warehouse_id, order_id, invoice_no, sku_id, qty,
-                   gross_value::float AS gross_value, discount::float AS discount,
-                   net_value::float AS net_value, taxable_value::float AS taxable_value,
-                   tax_value::float AS tax_value, city, state, pincode, payment_method, return_flag
-            FROM fact_sales WHERE sale_date BETWEEN %s AND %s
-        """, (start, end))
+        try:
+            df = db.query_df("""
+                SELECT sale_date, channel_id, warehouse_id, order_id, invoice_no, sku_id, qty,
+                       gross_value::float AS gross_value, discount::float AS discount,
+                       net_value::float AS net_value, taxable_value::float AS taxable_value,
+                       tax_value::float AS tax_value, city, state, pincode, payment_method,
+                       return_flag
+                FROM fact_sales WHERE sale_date BETWEEN %s AND %s
+            """, (start, end))
+        except db.MissingTable:
+            return _empty(SALES_COLUMNS)
     df = df.copy()
     df['sale_date'] = pd.to_datetime(df['sale_date'])
     df = df[(df['sale_date'] >= pd.Timestamp(start)) & (df['sale_date'] <= pd.Timestamp(end))]
@@ -229,13 +237,16 @@ def load_stock_latest() -> pd.DataFrame:
         if df is None or df.empty:
             return _empty(STOCK_COLUMNS)
     else:
-        df = db.query_df("""
-            SELECT s.snapshot_date, s.sku_id, s.warehouse_id, s.stock_qty
-            FROM fact_stock_snapshot s
-            JOIN (SELECT warehouse_id, MAX(snapshot_date) AS d
-                  FROM fact_stock_snapshot GROUP BY warehouse_id) l
-              ON l.warehouse_id = s.warehouse_id AND l.d = s.snapshot_date
-        """)
+        try:
+            df = db.query_df("""
+                SELECT s.snapshot_date, s.sku_id, s.warehouse_id, s.stock_qty
+                FROM fact_stock_snapshot s
+                JOIN (SELECT warehouse_id, MAX(snapshot_date) AS d
+                      FROM fact_stock_snapshot GROUP BY warehouse_id) l
+                  ON l.warehouse_id = s.warehouse_id AND l.d = s.snapshot_date
+            """)
+        except db.MissingTable:
+            return _empty(STOCK_COLUMNS)
     df = df.copy()
     df['snapshot_date'] = pd.to_datetime(df['snapshot_date'])
     if 'warehouse_name' not in df.columns:
@@ -260,11 +271,14 @@ def load_production() -> pd.DataFrame:
     if s == 'local':
         df = store.load('production')
         return df if df is not None else _empty(PRODUCTION_COLUMNS)
-    df = db.query_df("""
-        SELECT lot_id, style_code, product_name, category, vendor, color,
-               planned_qty, received_qty, po_date, expected_date, current_stage, updated_at
-        FROM fact_production_lot
-    """)
+    try:
+        df = db.query_df("""
+            SELECT lot_id, style_code, product_name, category, vendor, color,
+                   planned_qty, received_qty, po_date, expected_date, current_stage, updated_at
+            FROM fact_production_lot
+        """)
+    except db.MissingTable:
+        return _empty(PRODUCTION_COLUMNS)
     for c in ('po_date', 'expected_date', 'updated_at'):
         df[c] = pd.to_datetime(df[c])
     return _coerce(df)
@@ -280,11 +294,16 @@ def load_purchases() -> pd.DataFrame:
         if df is None or df.empty:
             return _empty(PURCHASE_COLUMNS)
     else:
-        df = db.query_df("""
-            SELECT purchase_date, supplier, voucher_type, voucher_no, qty,
-                   value::float AS value, gross_total::float AS gross_total, fy
-            FROM fact_purchase
-        """)
+        try:
+            df = db.query_df("""
+                SELECT purchase_date, supplier, voucher_type, voucher_no, qty,
+                       value::float AS value, gross_total::float AS gross_total, fy
+                FROM fact_purchase
+            """)
+        except db.MissingTable:
+            # A database built from an older schema.sql simply has no purchases
+            # yet. That means "no cost basis", not "the page is broken".
+            return _empty(PURCHASE_COLUMNS)
         if df.empty:
             return _empty(PURCHASE_COLUMNS)
     df = df.copy()
@@ -334,10 +353,13 @@ def cost_basis(period_start=None, period_end=None) -> dict:
 def load_sync_log() -> pd.DataFrame:
     s = source()
     if s == 'supabase':
-        return db.query_df("""
-            SELECT DISTINCT ON (source) source, ran_at, rows_written, status, message
-            FROM sync_log ORDER BY source, ran_at DESC
-        """)
+        try:
+            return db.query_df("""
+                SELECT DISTINCT ON (source) source, ran_at, rows_written, status, message
+                FROM sync_log ORDER BY source, ran_at DESC
+            """)
+        except db.MissingTable:
+            return pd.DataFrame(columns=['source', 'ran_at', 'rows_written', 'status', 'message'])
     if s == 'local':
         meta = store.read_meta()
         return pd.DataFrame([{'source': k, 'ran_at': v.get('saved_at'), 'rows_written': v.get('rows'),

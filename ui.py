@@ -45,6 +45,18 @@ def page_setup(title: str, icon: str) -> None:
                     'The app restarts by itself after you save.')
         st.stop()
 
+    # A database built from an older schema.sql is missing newer tables. That is
+    # a normal state — say which ones and hand over the SQL, rather than letting
+    # a page die on whichever query happened to run first.
+    if getattr(_db, 'MISSING_TABLES', None):
+        names = ', '.join(f'`{t}`' for t in sorted(_db.MISSING_TABLES))
+        st.warning(f'Your database does not have {names} yet, so anything that needs it is '
+                   f'switched off. Everything else works.', icon='🗄')
+        sql = _db.missing_table_sql()
+        if sql:
+            with st.expander('Add the missing table — paste this into Supabase → SQL Editor → Run'):
+                st.code(sql, language='sql')
+
     src = data.source()
     if src == 'demo':
         st.info('**Demo data.** Load a real file on the 📥 Data Hub page, or connect Supabase. '

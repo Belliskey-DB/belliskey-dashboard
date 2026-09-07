@@ -13,6 +13,7 @@ If SUPABASE_HOST is missing the app runs on DEMO data (see demo_data.py).
 from __future__ import annotations
 
 import os
+import re
 import pandas as pd
 import streamlit as st
 
@@ -112,14 +113,65 @@ def diagnose(reason: str) -> str:
     return ('Check every SUPABASE_ value against the Session pooler tab in Supabase under Connect.')
 
 
+class MissingTable(Exception):
+    """A table the app expects is not in this database yet."""
+
+    def __init__(self, table: str):
+        self.table = table
+        super().__init__(f'relation "{table}" does not exist')
+
+
+# Tables the app has asked for and the database does not have. Filled in as
+# queries fail so one banner can list them all instead of a page dying on the
+# first one. The schema grows over time and a database created from an older
+# schema.sql is a normal state, not a broken one.
+MISSING_TABLES: set[str] = set()
+
+
+def _missing_table_name(exc: Exception) -> str | None:
+    m = re.search(r'relation "([^"]+)" does not exist', str(exc))
+    return m.group(1) if m else None
+
+
 def query_df(sql: str, params=None) -> pd.DataFrame:
-    """Run a SELECT and return a DataFrame."""
+    """Run a SELECT and return a DataFrame. Raises MissingTable if the table is absent."""
+    import psycopg2
     conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute(sql, params)
-        cols = [d[0] for d in cur.description]
-        rows = cur.fetchall()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+    except psycopg2.errors.UndefinedTable as e:
+        name = _missing_table_name(e) or 'unknown'
+        MISSING_TABLES.add(name)
+        raise MissingTable(name) from e
     return pd.DataFrame(rows, columns=cols)
+
+
+# The SQL that creates each table, so the app can tell you exactly what to run
+# rather than sending you back to the repo to work out which bit is missing.
+TABLE_SQL = {
+    'fact_purchase': """CREATE TABLE IF NOT EXISTS fact_purchase (
+    purchase_id   bigserial PRIMARY KEY,
+    purchase_date date NOT NULL,
+    supplier      text NOT NULL DEFAULT '',
+    voucher_type  text,
+    voucher_no    text NOT NULL DEFAULT '',
+    qty           integer DEFAULT 0,
+    value         numeric(14,2) DEFAULT 0,
+    gross_total   numeric(14,2) DEFAULT 0,
+    fy            text,
+    UNIQUE (supplier, voucher_no, purchase_date)
+);
+CREATE INDEX IF NOT EXISTS fact_purchase_date_idx ON fact_purchase (purchase_date);
+ALTER TABLE fact_purchase ENABLE ROW LEVEL SECURITY;""",
+}
+
+
+def missing_table_sql() -> str:
+    """Ready-to-run SQL for whatever this database is missing."""
+    return '\n\n'.join(TABLE_SQL[t] for t in sorted(MISSING_TABLES) if t in TABLE_SQL)
 
 
 def execute(sql: str, params=None) -> None:
