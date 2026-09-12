@@ -28,10 +28,18 @@ import pandas as pd
 COLUMNS = {
     'sku_id':      ['sku', 'sku code', 'sku id', 'barcode', 'ean', 'ean code', 'item sku',
                     'seller sku', 'product code', 'uniware sku'],
-    'style_code':  ['style', 'style no', 'style code', 'style number', 'design', 'design no',
-                    'article', 'article no', 'style name'],
-    'product_name': ['product', 'product name', 'description', 'item name', 'item', 'title'],
-    'category':    ['category', 'product type', 'type', 'garment type'],
+    # 'Article no' comes FIRST on purpose. Belliskey's costing sheet carries both
+    # "Style No." (20137-10) and "Article No." (20137-10-BYWWSHR), and it is the
+    # article that matches the style code already in the master — 578 of 583
+    # against 0 of 550. Taking the wrong one silently re-keys every style.
+    'style_code':  ['article no', 'article', 'article code', 'style code', 'style no',
+                    'style number', 'style', 'design no', 'design', 'style name'],
+    # 'Product' holds the category (Jeans, Shorts); 'Product Type' holds the
+    # descriptive name (HIGH WAIST DENIM SHORTS). Reading those the other way
+    # round replaces a clean 14-category list with hundreds of descriptions.
+    'product_name': ['product type', 'product name', 'item description', 'description',
+                     'item name', 'item', 'title'],
+    'category':    ['category', 'product', 'garment type', 'type'],
     'gender':      ['gender', 'for', 'segment'],
     'color':       ['colour', 'color', 'shade'],
     'size':        ['size'],
@@ -77,6 +85,14 @@ def _text(s: pd.Series) -> pd.Series:
     return s.astype(str).str.strip().replace({'nan': None, 'None': None, '': None})
 
 
+def _gender(s: pd.Series) -> pd.Series:
+    """\"Women's\" and \"Womens\" are the same thing the master already calls \"Women\"."""
+    return (s.fillna('').astype(str).str.strip()
+             .str.replace(r"[\u2019']s$", '', regex=True)
+             .str.replace(r"s'$", '', regex=True)
+             .str.title().replace({'': None, 'Nan': None}))
+
+
 def parse(df: pd.DataFrame, fx_rate: float = 1.0) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Returns (accepted, rejected, report).
@@ -101,6 +117,15 @@ def parse(df: pd.DataFrame, fx_rate: float = 1.0) -> tuple[pd.DataFrame, pd.Data
     for c in ('sku_id', 'style_code', 'product_name', 'category', 'gender', 'color', 'size', 'currency'):
         if c in mapped.columns:
             mapped[c] = _text(mapped[c])
+    if 'gender' in mapped.columns:
+        mapped['gender'] = _gender(mapped['gender'])
+    if 'category' in mapped.columns:
+        # The costing sheet drifts the same way the stock workbook does:
+        # 'jeans' and 'Jeans', 'Skirt' and 'Skirts', 'T-Shirt' and 'T-shirt'.
+        # Reuse one canonical list so both files land on the same categories.
+        from stockfile import CANONICAL, _key as _ckey
+        mapped['category'] = mapped['category'].map(
+            lambda v: CANONICAL.get(_ckey(v), str(v).title()) if pd.notna(v) and str(v).strip() else None)
     for c in ('mrp', 'cost_price'):
         if c in mapped.columns:
             mapped[c] = _num(mapped[c])
