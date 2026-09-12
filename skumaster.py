@@ -77,7 +77,10 @@ def map_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 
 def _num(s: pd.Series) -> pd.Series:
     return pd.to_numeric(
-        s.astype(str).str.replace(r'[₹$,\s]', '', regex=True).replace({'': None, 'nan': None}),
+        # A negated class, not [₹$,\s]: RE2 (which backs pandas strings in the
+        # cloud) matches only ASCII whitespace with \s, so a non-breaking space
+        # inside a currency-formatted cell survived and the price read as blank.
+        s.astype(str).str.replace(r'[^0-9.\-]', '', regex=True).replace({'': None, 'nan': None, '-': None}),
         errors='coerce')
 
 
@@ -174,9 +177,18 @@ def parse(df: pd.DataFrame, fx_rate: float = 1.0) -> tuple[pd.DataFrame, pd.Data
     rejected['reason'] = reasons[reasons != '']
     accepted = mapped[reasons == ''].copy()
 
+    # Keep a few raw-vs-parsed pairs. When a price column reads as blank the
+    # cause is almost always the formatting in the cell, and seeing the original
+    # text beside the number turns a mystery into an obvious one.
+    raw_cost_col = matched.get('cost_price')
+    samples = []
+    if raw_cost_col and raw_cost_col in raw.columns:
+        for orig, got in list(zip(raw[raw_cost_col].head(6), mapped['cost_price'].head(6)))[:6]:
+            samples.append({'in the sheet': repr(orig), 'read as': (None if pd.isna(got) else float(got))})
+
     report.update(
         accepted=len(accepted), rejected=len(rejected),
-        key=key,
+        key=key, cost_samples=samples, cost_column=raw_cost_col,
         cost_min=float(accepted['cost_price'].min()) if len(accepted) else None,
         cost_max=float(accepted['cost_price'].max()) if len(accepted) else None,
         cost_mean=float(accepted['cost_price'].mean()) if len(accepted) else None,

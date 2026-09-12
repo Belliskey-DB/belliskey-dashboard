@@ -71,10 +71,13 @@ st.divider()
 tab_sheet, tab_file, tab_browse = st.tabs(['🔗 Google Sheet', '📄 Upload a file', '🔍 Browse the master'])
 
 
-def _write(rows: pd.DataFrame, note: str) -> None:
+def _write(rows: pd.DataFrame, note: str) -> dict:
+    """Write the master and then READ BACK what landed, so success is a fact."""
     keep = ['sku_id', 'style_code', 'product_name', 'category', 'gender', 'color', 'size',
             'mrp', 'cost_price', 'launch_date']
     rows = rows.reindex(columns=[c for c in keep if c in rows.columns])
+    sent = int(pd.to_numeric(rows.get('cost_price'), errors='coerce').notna().sum())
+
     if TO_SUPABASE:
         import sheets
         conn = db.get_conn()
@@ -82,6 +85,8 @@ def _write(rows: pd.DataFrame, note: str) -> None:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO sync_log (source, rows_written, status, message) "
                         "VALUES ('sku_master', %s, 'ok', %s)", (n, note[:400]))
+            cur.execute('SELECT count(*), count(cost_price) FROM dim_sku')
+            total, with_cost = cur.fetchone()
         conn.commit()
     else:
         old = store.load('sku')
@@ -91,14 +96,16 @@ def _write(rows: pd.DataFrame, note: str) -> None:
             for col in incoming.columns:
                 if col not in merged.columns:
                     merged[col] = pd.NA
-                # only overwrite where the sheet actually says something
                 vals = incoming[col].reindex(merged.index)
                 merged[col] = vals.where(vals.notna(), merged[col])
             extra = incoming[~incoming.index.isin(merged.index)]
             merged = pd.concat([merged, extra]) if len(extra) else merged
             rows = merged.reset_index()
         store.save('sku', rows, note=note)
+        total = len(rows)
+        with_cost = int(pd.to_numeric(rows['cost_price'], errors='coerce').notna().sum())
     data.clear_cache()
+    return {'sent': sent, 'total': int(total), 'with_cost': int(with_cost)}
 
 
 def _preview_and_write(raw: pd.DataFrame, source_note: str, fx: float) -> None:
@@ -114,6 +121,12 @@ def _preview_and_write(raw: pd.DataFrame, source_note: str, fx: float) -> None:
     b.metric('Rows rejected', units(rep['rejected']), delta_color='inverse' if rep['rejected'] else 'off')
     c.metric('Cost range', f"{inr(rep['cost_min'])} – {inr(rep['cost_max'])}" if rep['cost_min'] is not None else '–',
              help=f"average {inr(rep['cost_mean'])}" if rep['cost_mean'] else None)
+
+    if rep.get('cost_samples'):
+        with st.expander(f"How the cost column `{rep.get('cost_column')}` was read", expanded=not rep['accepted']):
+            st.dataframe(pd.DataFrame(rep['cost_samples']), hide_index=True, width='stretch')
+            st.caption('If "read as" is blank while the sheet clearly shows a number, the cell is '
+                       'carrying formatting the parser did not expect — send me this table.')
 
     if rep['rejected']:
         with st.expander(f"{rep['rejected']} rows left out, and why", expanded=True):
@@ -143,9 +156,18 @@ def _preview_and_write(raw: pd.DataFrame, source_note: str, fx: float) -> None:
         return
     st.dataframe(rows.head(20), hide_index=True, width='stretch')
     if st.button(f'Load cost for {len(rows):,} barcodes', type='primary', key=f'w_{source_note}'):
-        _write(rows, source_note)
-        st.success(f'Done. {len(rows):,} barcodes now carry a cost — the P&L has switched to real margin.')
-        st.balloons()
+        res = _write(rows, source_note)
+        if res['with_cost'] == 0:
+            st.error(f"Wrote {res['total']:,} barcodes but **none of them came back with a cost**, "
+                     f"even though {res['sent']:,} costs were sent. That is a write problem, not a "
+                     f"reading problem — send me this message.", icon='🛑')
+        elif res['with_cost'] < res['sent']:
+            st.warning(f"Sent {res['sent']:,} costs, and {res['with_cost']:,} are now stored. "
+                       f"The gap is usually barcodes that exist in the sheet but not in the master.")
+        else:
+            st.success(f"Done. **{res['with_cost']:,} of {res['total']:,} barcodes** now carry a "
+                       f"cost — the P&L has switched to real margin.")
+            st.balloons()
         st.rerun()
 
 

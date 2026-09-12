@@ -69,7 +69,10 @@ def _to_date(s: pd.Series) -> pd.Series:
 
 
 def _to_num(s: pd.Series) -> pd.Series:
-    return pd.to_numeric(s.astype(str).str.replace(r'[₹,\s]', '', regex=True), errors='coerce')
+    # Negated class so unicode spaces and any currency symbol are stripped on
+    # both the Python and the Arrow/RE2 string backends.
+    return pd.to_numeric(s.astype(str).str.replace(r'[^0-9.\-]', '', regex=True)
+                          .replace({'': None, '-': None}), errors='coerce')
 
 
 def clean_master(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
