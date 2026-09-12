@@ -218,18 +218,33 @@ def to_sku_rows(accepted: pd.DataFrame, level: str, known_skus: pd.DataFrame) ->
     return out.reset_index(drop=True), info
 
 
-def read_google_sheet(sheet_id: str, tab: str | None, service_account_info: dict) -> pd.DataFrame:
-    """Read a tab of a Google Sheet. The service account needs Viewer access on it."""
+def read_google_sheet(sheet_id: str, tab: str | None = None,
+                      service_account_info: dict | None = None,
+                      gid: int | str | None = None) -> tuple[pd.DataFrame, str]:
+    """
+    Read one tab of a Google Sheet. Returns (frame, the tab's name).
+
+    A tab can be named or identified by gid. The gid is what a Sheets URL
+    carries (…#gid=2011622154) and it is stable when someone renames the tab,
+    so it is preferred when both are given.
+
+    The service account needs Viewer access on the sheet.
+    """
     import gspread
     from google.oauth2.service_account import Credentials
     creds = Credentials.from_service_account_info(service_account_info, scopes=[
         'https://www.googleapis.com/auth/spreadsheets.readonly',
         'https://www.googleapis.com/auth/drive.readonly'])
     sh = gspread.authorize(creds).open_by_key(sheet_id)
-    ws = sh.worksheet(tab) if tab else sh.get_worksheet(0)
+    if gid not in (None, '', 'None'):
+        ws = sh.get_worksheet_by_id(int(gid))
+    elif tab:
+        ws = sh.worksheet(tab)
+    else:
+        ws = sh.get_worksheet(0)
     values = ws.get_all_values()
     if not values:
-        return pd.DataFrame()
+        return pd.DataFrame(), ws.title
     # The header is the first row with at least three filled cells — costing
     # sheets usually carry a title and a blank line above the real table.
     hdr = next((i for i, r in enumerate(values) if sum(bool(str(c).strip()) for c in r) >= 3), 0)
@@ -241,10 +256,24 @@ def read_google_sheet(sheet_id: str, tab: str | None, service_account_info: dict
         c = str(c).strip() or 'unnamed'
         seen[c] = seen.get(c, 0) + 1
         uniq.append(c if seen[c] == 1 else f'{c}_{seen[c]}')
-    return pd.DataFrame(body, columns=uniq).replace('', None)
+    return pd.DataFrame(body, columns=uniq).replace('', None), ws.title
+
+
+def parse_sheet_ref(url: str) -> tuple[str, str | None]:
+    """
+    Pull the sheet id and the tab gid out of whatever was pasted.
+
+    Accepts a full URL (…/d/<id>/edit?…#gid=<gid>), or a bare id. Returning the
+    gid matters: a link copied from the browser points at the tab the person was
+    looking at, and reading the first tab instead would quietly load the wrong data.
+    """
+    text = str(url).strip()
+    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', text)
+    sheet_id = m.group(1) if m else text.split('?')[0].split('#')[0].strip()
+    g = re.search(r'[#&?]gid=(\d+)', text)
+    return sheet_id, (g.group(1) if g else None)
 
 
 def sheet_id_from_url(url: str) -> str:
-    """Accepts a full Sheets URL or a bare id."""
-    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', str(url))
-    return m.group(1) if m else str(url).strip()
+    """Backwards-compatible shim."""
+    return parse_sheet_ref(url)[0]

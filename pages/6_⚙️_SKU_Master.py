@@ -150,49 +150,68 @@ def _preview_and_write(raw: pd.DataFrame, source_note: str, fx: float) -> None:
 
 
 with tab_sheet:
-    st.markdown('#### Read the master straight from Google Sheets')
-    has_sa = 'gcp_service_account' in (st.secrets if hasattr(st, 'secrets') else {})
-    default_id = ''
+    st.markdown('#### Sync straight from the Google Sheet')
     try:
-        default_id = str(st.secrets.get('SKU_MASTER_SHEET_ID', ''))
+        secrets_ok = 'gcp_service_account' in st.secrets
+        default_url = str(st.secrets.get('SKU_MASTER_SHEET_ID', ''))
+        default_gid = str(st.secrets.get('SKU_MASTER_GID', ''))
+        sa_email = str(dict(st.secrets['gcp_service_account']).get('client_email', '')) if secrets_ok else ''
     except Exception:
-        pass
-    url = st.text_input('Sheet link or id', value=default_id,
-                        placeholder='https://docs.google.com/spreadsheets/d/…')
-    tab_name = st.text_input('Tab name', value=(st.secrets.get('SKU_MASTER_TAB', '')
-                                                if hasattr(st, 'secrets') else ''),
-                             placeholder='leave blank for the first tab')
-    fx = st.number_input('Multiply the cost by', value=1.0, step=0.01, min_value=0.0,
-                         help='Leave at 1 when FOB is already in rupees. Set it to the exchange '
-                              'rate if the sheet quotes another currency.')
-    if not has_sa:
-        st.warning('No Google service account is configured yet, so the live link cannot read the '
-                   'sheet. Either set one up, or use the **Upload a file** tab, which needs nothing.',
+        secrets_ok, default_url, default_gid, sa_email = False, '', '', ''
+
+    if not secrets_ok:
+        st.warning('No Google service account is set on this app yet, so it cannot read the sheet.',
                    icon='🔑')
-        with st.expander('How to set up the service account, once'):
-            st.markdown(
-                '1. console.cloud.google.com → create a project.\n'
-                '2. APIs & Services → Library → enable **Google Sheets API** and **Google Drive API**.\n'
-                '3. Credentials → Create credentials → **Service account**, then its Keys tab → '
-                'Add key → **JSON**, and download it.\n'
-                '4. Open the master sheet → Share → paste the service account\'s `client_email` → **Viewer**.\n'
-                '5. In Streamlit → Settings → Secrets, paste the JSON under `[gcp_service_account]` '
-                'and add `SKU_MASTER_SHEET_ID = "…"`.')
-    elif st.button('Read the sheet', type='primary', disabled=not url):
+        st.markdown(
+            '**You already have one.** The Tales & Stories app uses a service account for its own '
+            'sheet sync, and the same one works here — nothing new to create in Google Cloud.\n\n'
+            '1. In Streamlit, open the **Tales & Stories** app → ⋮ → Settings → **Secrets**. Copy the '
+            'whole `[gcp_service_account]` block, from that line down to the last key.\n'
+            '2. Open the Belliskey master sheet → **Share** → paste the `client_email` from that '
+            'block → give it **Viewer** → Send.\n'
+            '3. Come back to **this** app → ⋮ → Settings → **Secrets**, paste the block, and add:\n'
+            '```toml\nSKU_MASTER_SHEET_ID = "the sheet id or full link"\nSKU_MASTER_GID = "2011622154"\n```\n'
+            '4. Save. The app restarts, and this tab turns into a one-click sync.')
+    else:
+        st.success(f'Service account connected: `{sa_email}`')
+        st.caption('The sheet must be shared with that address as Viewer, or the read is refused.')
+
+    url = st.text_input('Sheet link or id', value=default_url,
+                        placeholder='https://docs.google.com/spreadsheets/d/…')
+    sheet_id, gid_from_url = sm.parse_sheet_ref(url) if url else ('', None)
+    gid = st.text_input('Tab gid', value=(gid_from_url or default_gid),
+                        help='The number after gid= in the sheet link. Leave blank for the first '
+                             'tab. A gid keeps pointing at the right tab even if it is renamed.')
+    fx = st.number_input('Multiply the cost by', value=1.0, step=0.01, min_value=0.0,
+                         help='Leave at 1 — Belliskey quotes FOB in rupees.')
+
+    if st.button('🔄 Sync now', type='primary', disabled=not (secrets_ok and url)):
         try:
-            raw = sm.read_google_sheet(sm.sheet_id_from_url(url), tab_name or None,
-                                       dict(st.secrets['gcp_service_account']))
+            with st.spinner('Reading the sheet…'):
+                raw, tab_title = sm.read_google_sheet(
+                    sheet_id, None, dict(st.secrets['gcp_service_account']),
+                    gid=gid or None)
             st.session_state['sku_sheet_raw'] = raw
+            st.session_state['sku_sheet_tab'] = tab_title
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             st.error('Could not read that sheet.')
-            if 'PERMISSION_DENIED' in msg or 'not have permission' in msg:
-                st.markdown('Share the sheet with the service account\'s `client_email` as **Viewer**.')
-            elif 'not found' in msg.lower():
-                st.markdown('Check the link, and that the tab name matches exactly.')
+            low = msg.lower()
+            if 'permission' in low or '403' in msg:
+                st.markdown(f'Share the sheet with **{sa_email or "the service account"}** as '
+                            f'**Viewer**. That is the usual cause.')
+            elif 'not found' in low or '404' in msg:
+                st.markdown('Check the link. If the gid is wrong the tab will not be found either — '
+                            'clear it to read the first tab.')
+            elif 'api has not been used' in low or 'disabled' in low:
+                st.markdown('Enable **Google Sheets API** and **Google Drive API** on that Cloud project.')
             st.code(msg[:400], language='text')
+
     if isinstance(st.session_state.get('sku_sheet_raw'), pd.DataFrame):
-        _preview_and_write(st.session_state['sku_sheet_raw'], 'google sheet', fx)
+        tt = st.session_state.get('sku_sheet_tab')
+        if tt:
+            st.caption(f'Read from tab **{tt}**')
+        _preview_and_write(st.session_state['sku_sheet_raw'], f'google sheet · {tt or ""}'.strip(), fx)
 
 
 with tab_file:
