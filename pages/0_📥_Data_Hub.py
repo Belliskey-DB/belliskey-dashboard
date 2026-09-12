@@ -298,6 +298,10 @@ def _sheet_block(title: str, cleaner, writer, table: str, dedupe: list[str], hin
 
 
 with t2:
+    st.info('The **⚙️ SKU Master** page in the sidebar does this properly: it reads the live Google '
+            'Sheet, handles a sheet priced by style as well as by barcode, shows which rows it '
+            'refused and why, and tells you how much of what actually sold now has a cost. '
+            'This tab is the plain version.', icon='⚙️')
     _sheet_block('Master sheet → SKU costs and style codes', sheets.clean_master, sheets.write_master,
                  'sku', ['sku_id'],
                  'This is what unlocks profit: cost price per SKU. It also adds style code and size, '

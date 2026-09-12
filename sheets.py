@@ -22,7 +22,8 @@ MASTER_COLUMNS = {
     'color':        ['color', 'colour'],
     'size':         ['size'],
     'mrp':          ['mrp', 'max retail price'],
-    'cost_price':   ['cost', 'cost price', 'landed cost', 'cp', 'unit cost', 'total cost'],
+    'cost_price':   ['fob', 'fob price', 'fob rate', 'fob cost', 'cost', 'cost price',
+                     'landed cost', 'cp', 'unit cost', 'total cost', 'factory price'],
     'launch_date':  ['launch date', 'launch', 'live date', 'listing date'],
 }
 MASTER_REQUIRED = ['sku_id']

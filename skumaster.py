@@ -1,0 +1,225 @@
+"""
+skumaster.py — the SKU master: barcodes, style numbers and FOB cost.
+
+This is the file that turns the dashboard from "revenue after deductions" into
+real profit, because it is the only place a cost per item exists. The supplier
+ledger can only ever give a blended average across everything bought; this
+gives the cost of the actual thing that sold.
+
+Two shapes are accepted, because a costing sheet is usually kept one way or
+the other and neither is wrong:
+
+  SKU level     one row per barcode. Used as-is.
+  STYLE level   one row per style, no barcode. The cost is applied to every
+                barcode of that style, which is how FOB is quoted anyway —
+                a size 28 and a size 32 of the same skirt cost the same to make.
+
+Reads either a live Google Sheet (service account) or a file exported from it.
+Rows that cannot be trusted are rejected with a reason rather than silently
+loaded, because a wrong cost is worse than a missing one: it produces a margin
+that looks real.
+"""
+from __future__ import annotations
+
+import re
+import pandas as pd
+
+# target -> header names that mean it, matched case- and space-insensitively
+COLUMNS = {
+    'sku_id':      ['sku', 'sku code', 'sku id', 'barcode', 'ean', 'ean code', 'item sku',
+                    'seller sku', 'product code', 'uniware sku'],
+    'style_code':  ['style', 'style no', 'style code', 'style number', 'design', 'design no',
+                    'article', 'article no', 'style name'],
+    'product_name': ['product', 'product name', 'description', 'item name', 'item', 'title'],
+    'category':    ['category', 'product type', 'type', 'garment type'],
+    'gender':      ['gender', 'for', 'segment'],
+    'color':       ['colour', 'color', 'shade'],
+    'size':        ['size'],
+    'mrp':         ['mrp', 'max retail price', 'retail price', 'list price'],
+    'cost_price':  ['fob', 'fob price', 'fob rate', 'fob cost', 'fob value', 'cost', 'cost price',
+                    'landed cost', 'unit cost', 'purchase price', 'factory price', 'making cost',
+                    'cp', 'rate'],
+    'currency':    ['currency', 'curr', 'ccy'],
+    'launch_date': ['launch date', 'launch', 'live date', 'listing date', 'season start'],
+}
+IDENTIFIERS = ('sku_id', 'style_code')
+
+
+def _key(s) -> str:
+    return re.sub(r'[^a-z0-9]', '', str(s).lower())
+
+
+def map_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Rename the sheet's headers to our names. Returns (frame, which header matched what)."""
+    lookup = {}
+    for col in df.columns:
+        lookup.setdefault(_key(col), col)
+    rename, matched = {}, {}
+    for target, names in COLUMNS.items():
+        for n in names:
+            actual = lookup.get(_key(n))
+            if actual is not None and actual not in rename:
+                rename[actual] = target
+                matched[target] = actual
+                break
+    out = df.rename(columns=rename)
+    keep = [c for c in COLUMNS if c in out.columns]
+    return out[keep].copy(), matched
+
+
+def _num(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(
+        s.astype(str).str.replace(r'[₹$,\s]', '', regex=True).replace({'': None, 'nan': None}),
+        errors='coerce')
+
+
+def _text(s: pd.Series) -> pd.Series:
+    return s.astype(str).str.strip().replace({'nan': None, 'None': None, '': None})
+
+
+def parse(df: pd.DataFrame, fx_rate: float = 1.0) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """
+    Returns (accepted, rejected, report).
+
+    fx_rate multiplies the cost, for a sheet quoting FOB in a foreign currency.
+    """
+    raw = df.copy()
+    raw.columns = [str(c).strip() for c in raw.columns]
+    mapped, matched = map_columns(raw)
+    report: dict = {'matched': matched, 'headers_seen': list(raw.columns), 'rows_in_file': len(raw)}
+
+    present = [c for c in IDENTIFIERS if c in mapped.columns]
+    if not present:
+        report['error'] = ('No barcode and no style number found. One of them is needed to know '
+                           'what a cost belongs to. Headers seen: ' + ', '.join(map(str, raw.columns)))
+        return pd.DataFrame(), pd.DataFrame(), report
+    if 'cost_price' not in mapped.columns:
+        report['error'] = ('No FOB or cost column found. Headers seen: '
+                           + ', '.join(map(str, raw.columns)))
+        return pd.DataFrame(), pd.DataFrame(), report
+
+    for c in ('sku_id', 'style_code', 'product_name', 'category', 'gender', 'color', 'size', 'currency'):
+        if c in mapped.columns:
+            mapped[c] = _text(mapped[c])
+    for c in ('mrp', 'cost_price'):
+        if c in mapped.columns:
+            mapped[c] = _num(mapped[c])
+    if 'launch_date' in mapped.columns:
+        mapped['launch_date'] = pd.to_datetime(mapped['launch_date'], errors='coerce', dayfirst=True).dt.date
+
+    # A sheet is SKU level only if it actually carries barcodes.
+    level = 'sku' if ('sku_id' in mapped.columns and mapped['sku_id'].notna().any()) else 'style'
+    report['level'] = level
+
+    if fx_rate and fx_rate != 1.0:
+        mapped['cost_price'] = mapped['cost_price'] * float(fx_rate)
+
+    key = 'sku_id' if level == 'sku' else 'style_code'
+    mapped = mapped[mapped[key].notna()]
+
+    # ---- validation. A wrong cost is worse than a missing one.
+    reasons = pd.Series('', index=mapped.index)
+    cost = mapped['cost_price']
+    reasons[cost.isna()] = 'no cost value'
+    reasons[(reasons == '') & (cost <= 0)] = 'cost is zero or negative'
+    if 'mrp' in mapped.columns:
+        bad = (reasons == '') & mapped['mrp'].notna() & (mapped['mrp'] > 0) & (cost > mapped['mrp'])
+        reasons[bad] = 'cost is higher than MRP'
+    dupe = mapped.duplicated(key, keep='last') & (reasons == '')
+    reasons[dupe] = f'duplicate {key}, an earlier row was superseded'
+
+    rejected = mapped[reasons != ''].copy()
+    rejected['reason'] = reasons[reasons != '']
+    accepted = mapped[reasons == ''].copy()
+
+    report.update(
+        accepted=len(accepted), rejected=len(rejected),
+        key=key,
+        cost_min=float(accepted['cost_price'].min()) if len(accepted) else None,
+        cost_max=float(accepted['cost_price'].max()) if len(accepted) else None,
+        cost_mean=float(accepted['cost_price'].mean()) if len(accepted) else None,
+        reject_reasons=rejected['reason'].value_counts().to_dict() if len(rejected) else {},
+    )
+    return accepted.reset_index(drop=True), rejected.reset_index(drop=True), report
+
+
+def to_sku_rows(accepted: pd.DataFrame, level: str, known_skus: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Turn accepted rows into one row per barcode, ready for dim_sku.
+
+    A style-level sheet is fanned out across every barcode of that style using
+    the SKU list already loaded from her stock workbook. Styles with no barcode
+    on record are reported rather than dropped quietly — they are usually a
+    style number typed differently in the two files.
+    """
+    info: dict = {}
+    if accepted.empty:
+        return pd.DataFrame(), info
+
+    if level == 'sku':
+        out = accepted.copy()
+        info['matched_skus'] = len(out)
+        if known_skus is not None and not known_skus.empty:
+            known = set(known_skus['sku_id'].astype(str))
+            unknown = out.loc[~out['sku_id'].astype(str).isin(known), 'sku_id']
+            info['unknown_skus'] = unknown.tolist()[:50]
+            info['unknown_count'] = int(len(unknown))
+        return out, info
+
+    # style level -> fan out
+    if known_skus is None or known_skus.empty or 'style_code' not in known_skus.columns:
+        info['error'] = ('This sheet is priced by style, so the barcodes for each style are needed '
+                         'to apply it. Load her stock workbook on the Data Hub first.')
+        return pd.DataFrame(), info
+
+    ks = known_skus[['sku_id', 'style_code']].dropna(subset=['style_code']).copy()
+    ks['_k'] = ks['style_code'].astype(str).str.strip().str.upper()
+    src = accepted.copy()
+    src['_k'] = src['style_code'].astype(str).str.strip().str.upper()
+
+    merged = ks.merge(src.drop(columns=['sku_id'], errors='ignore'), on='_k', how='inner',
+                      suffixes=('', '_sheet'))
+    merged['style_code'] = merged['style_code'].fillna(merged.get('style_code_sheet'))
+    out = merged.drop(columns=[c for c in merged.columns if c.endswith('_sheet') or c == '_k'],
+                      errors='ignore')
+
+    priced = set(src['_k'])
+    known_styles = set(ks['_k'])
+    info['styles_in_sheet'] = len(priced)
+    info['styles_matched'] = len(priced & known_styles)
+    info['styles_unmatched'] = sorted(priced - known_styles)[:50]
+    info['unmatched_count'] = len(priced - known_styles)
+    info['matched_skus'] = len(out)
+    return out.reset_index(drop=True), info
+
+
+def read_google_sheet(sheet_id: str, tab: str | None, service_account_info: dict) -> pd.DataFrame:
+    """Read a tab of a Google Sheet. The service account needs Viewer access on it."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+    creds = Credentials.from_service_account_info(service_account_info, scopes=[
+        'https://www.googleapis.com/auth/spreadsheets.readonly',
+        'https://www.googleapis.com/auth/drive.readonly'])
+    sh = gspread.authorize(creds).open_by_key(sheet_id)
+    ws = sh.worksheet(tab) if tab else sh.get_worksheet(0)
+    values = ws.get_all_values()
+    if not values:
+        return pd.DataFrame()
+    # The header is the first row with at least three filled cells — costing
+    # sheets usually carry a title and a blank line above the real table.
+    hdr = next((i for i, r in enumerate(values) if sum(bool(str(c).strip()) for c in r) >= 3), 0)
+    body = values[hdr + 1:]
+    cols = values[hdr]
+    seen: dict[str, int] = {}
+    uniq = []
+    for c in cols:
+        c = str(c).strip() or 'unnamed'
+        seen[c] = seen.get(c, 0) + 1
+        uniq.append(c if seen[c] == 1 else f'{c}_{seen[c]}')
+    return pd.DataFrame(body, columns=uniq).replace('', None)
+
+
+def sheet_id_from_url(url: str) -> str:
+    """Accepts a full Sheets URL or a bare id."""
+    m = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', str(url))
+    return m.group(1) if m else str(url).strip()
