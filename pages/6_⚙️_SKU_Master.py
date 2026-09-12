@@ -151,13 +151,30 @@ def _preview_and_write(raw: pd.DataFrame, source_note: str, fx: float) -> None:
 
 with tab_sheet:
     st.markdown('#### Sync straight from the Google Sheet')
+    # In TOML everything after a [table] header belongs to that table until the
+    # next header, whatever the indentation. So SKU_MASTER_SHEET_ID pasted below
+    # [gcp_service_account] silently becomes a key INSIDE it and the app sees
+    # nothing at the top level. Look in both places rather than making anyone
+    # debug a file format.
+    SA_KEYS = {'type', 'project_id', 'private_key_id', 'private_key', 'client_email',
+               'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url',
+               'client_x509_cert_url', 'universe_domain'}
+    sa_raw, misplaced = {}, []
     try:
         secrets_ok = 'gcp_service_account' in st.secrets
-        default_url = str(st.secrets.get('SKU_MASTER_SHEET_ID', ''))
-        default_gid = str(st.secrets.get('SKU_MASTER_GID', ''))
-        sa_email = str(dict(st.secrets['gcp_service_account']).get('client_email', '')) if secrets_ok else ''
+        sa_raw = dict(st.secrets['gcp_service_account']) if secrets_ok else {}
+        misplaced = [k for k in sa_raw if k not in SA_KEYS]
+
+        def _secret(name: str) -> str:
+            return str(st.secrets.get(name, '') or sa_raw.get(name, '') or '')
+
+        default_url = _secret('SKU_MASTER_SHEET_ID')
+        default_gid = _secret('SKU_MASTER_GID')
+        sa_email = str(sa_raw.get('client_email', ''))
     except Exception:
         secrets_ok, default_url, default_gid, sa_email = False, '', '', ''
+    # Credentials only wants the service-account fields.
+    sa_info = {k: v for k, v in sa_raw.items() if k in SA_KEYS}
 
     if not secrets_ok:
         st.warning('No Google service account is set on this app yet, so it cannot read the sheet.',
@@ -175,6 +192,11 @@ with tab_sheet:
     else:
         st.success(f'Service account connected: `{sa_email}`')
         st.caption('The sheet must be shared with that address as Viewer, or the read is refused.')
+        if misplaced:
+            st.info('Note: ' + ', '.join(f'`{k}`' for k in misplaced) + ' were pasted **below** the '
+                    '`[gcp_service_account]` line in Secrets. In TOML that puts them inside it, so '
+                    'they are not top-level settings. They are being read anyway, but move them '
+                    '**above** that line to keep the file honest.', icon='📝')
 
     url = st.text_input('Sheet link or id', value=default_url,
                         placeholder='https://docs.google.com/spreadsheets/d/…')
@@ -188,9 +210,7 @@ with tab_sheet:
     if st.button('🔄 Sync now', type='primary', disabled=not (secrets_ok and url)):
         try:
             with st.spinner('Reading the sheet…'):
-                raw, tab_title = sm.read_google_sheet(
-                    sheet_id, None, dict(st.secrets['gcp_service_account']),
-                    gid=gid or None)
+                raw, tab_title = sm.read_google_sheet(sheet_id, None, sa_info, gid=gid or None)
             st.session_state['sku_sheet_raw'] = raw
             st.session_state['sku_sheet_tab'] = tab_title
         except Exception as e:  # noqa: BLE001
