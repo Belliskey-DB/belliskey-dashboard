@@ -159,7 +159,7 @@ with pcol:
                      text=pay.apply(lambda r: f"{inr_short(r['value'])} · {r['share']:.0f}%", axis=1))
         fig.update_layout(showlegend=False, height=300)
         st.plotly_chart(fig, use_container_width=True)
-        cod = pay.loc[pay['payment_method'].str.contains('COD', na=False), 'share'].sum()
+        cod = pay.loc[pay['payment_method'].str.contains('COD', na=False, regex=False), 'share'].sum()
         if cod:
             st.caption(f'{cod:.0f}% of sales value is cash on delivery. COD orders are returned far more '
                        f'often than prepaid, so this is the single biggest driver of the return rate.')

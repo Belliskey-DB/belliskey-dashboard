@@ -271,7 +271,9 @@ with tab_browse:
             mask = False
             for c in ('sku_id', 'style_code', 'product_name'):
                 if c in v:
-                    mask = mask | v[c].astype(str).str.contains(q, case=False, na=False)
+                    # regex=False: the box is a search term, not a pattern — a stray
+                    # bracket would otherwise raise straight out of the page.
+                    mask = mask | v[c].astype(str).str.contains(q, case=False, na=False, regex=False)
             v = v[mask]
         if pick_cat != 'All':
             v = v[v['category'] == pick_cat]

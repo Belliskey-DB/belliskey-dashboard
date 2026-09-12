@@ -85,12 +85,29 @@ def _text(s: pd.Series) -> pd.Series:
     return s.astype(str).str.strip().replace({'nan': None, 'None': None, '': None})
 
 
+GENDER_CANON = {
+    'women': 'Women', 'woman': 'Women', 'womens': 'Women', 'ladies': 'Women', 'w': 'Women',
+    'men': 'Men', 'man': 'Men', 'mens': 'Men', 'm': 'Men',
+    'unisex': 'Unisex', 'kids': 'Kids', 'kid': 'Kids',
+    'boys': 'Boys', 'boy': 'Boys', 'girls': 'Girls', 'girl': 'Girls',
+}
+
+
+def _one_gender(v) -> str | None:
+    """\"Women's\", \"Womens\" and \"women\" are all the master's \"Women\"."""
+    t = str(v or '').replace('\u2019', "'").strip()
+    if not t:
+        return None
+    t = re.sub(r"'s$|s'$|'$", '', t).strip()
+    return GENDER_CANON.get(re.sub(r'[^a-z]', '', t.lower()), t.title()) or None
+
+
 def _gender(s: pd.Series) -> pd.Series:
-    """\"Women's\" and \"Womens\" are the same thing the master already calls \"Women\"."""
-    return (s.fillna('').astype(str).str.strip()
-             .str.replace(r"[\u2019']s$", '', regex=True)
-             .str.replace(r"s'$", '', regex=True)
-             .str.title().replace({'': None, 'Nan': None}))
+    # Deliberately .map() with a Python function rather than .str.replace(regex=True).
+    # In the cloud pandas backs strings with Arrow, whose regex engine is RE2, and
+    # RE2 rejects Python escapes like \u2019 — which crashed this page on the first
+    # real sync. A Python callable runs the same everywhere.
+    return s.map(_one_gender)
 
 
 def parse(df: pd.DataFrame, fx_rate: float = 1.0) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
